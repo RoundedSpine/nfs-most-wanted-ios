@@ -43,6 +43,65 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           cmake --version
           clang --version
+                - name: Download NFS Most Wanted game
+        env:
+          MEGA_GAME_URL: ${{ secrets.MEGA_GAME_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "Installing MEGA command-line tools..."
+          brew install megatools
+
+          mkdir -p "$RUNNER_TEMP/nfsmw"
+
+          echo "Downloading game archive from MEGA..."
+          megadl "$MEGA_GAME_URL" --path "$RUNNER_TEMP/nfsmw"
+
+          echo "Downloaded files:"
+          ls -lh "$RUNNER_TEMP/nfsmw"
+
+          ARCHIVE="$(find "$RUNNER_TEMP/nfsmw" -maxdepth 1 -type f -name '*.7z' -print -quit)"
+
+          if [ -z "$ARCHIVE" ]; then
+            echo "ERROR: MEGA download did not produce a .7z archive."
+            exit 1
+          fi
+
+          echo "Archive: $ARCHIVE"
+
+          echo "Extracting..."
+          mkdir -p "$RUNNER_TEMP/nfsmw/game"
+          brew install sevenzip
+          7zz x "$ARCHIVE" -o"$RUNNER_TEMP/nfsmw/game"
+
+          echo "Extracted game:"
+          find "$RUNNER_TEMP/nfsmw/game" -maxdepth 2 -type f | head -50
+
+          GAME_DIR="$RUNNER_TEMP/nfsmw/game"
+
+          if [ ! -f "$GAME_DIR/speed.exe" ]; then
+            echo "ERROR: speed.exe was not found."
+            exit 1
+          fi
+
+          SPEED_SIZE="$(stat -f%z "$GAME_DIR/speed.exe")"
+
+          if [ "$SPEED_SIZE" != "6029312" ]; then
+            echo "ERROR: speed.exe has unexpected size: $SPEED_SIZE"
+            exit 1
+          fi
+
+          echo "speed.exe verified: $SPEED_SIZE bytes"
+
+          echo "Checking required game directories..."
+          for DIR in CARS FRONTEND GLOBAL SOUND TRACKS; do
+            if [ ! -d "$GAME_DIR/$DIR" ]; then
+              echo "ERROR: Missing required directory: $DIR"
+              exit 1
+            fi
+          done
+
+          echo "Game input verified successfully."
 
       - name: Configure iOS build
         run: |
