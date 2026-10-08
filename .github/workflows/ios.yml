@@ -1,4 +1,5 @@
-﻿name: iOS Build
+
+name: iOS Build
 
 on:
   workflow_dispatch:
@@ -19,6 +20,12 @@ jobs:
         with:
           xcode-version: "16.4"
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
       - name: Show toolchain
         run: |
           set -euo pipefail
@@ -26,6 +33,7 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           cmake --version
+          python3.12 --version
 
       - name: Download and verify game
         env:
@@ -44,38 +52,72 @@ jobs:
           megadl "$MEGA_GAME_URL" --path "$RUNNER_TEMP/nfsmw"
 
           ARCHIVE="$(find "$RUNNER_TEMP/nfsmw" -maxdepth 1 -type f -name '*.7z' -print -quit)"
-          test -n "$ARCHIVE" || { echo "ERROR: Archive missing."; exit 1; }
+
+          if [ -z "$ARCHIVE" ]; then
+            echo "ERROR: Archive missing."
+            exit 1
+          fi
 
           7zz x "$ARCHIVE" -o"$RUNNER_TEMP/nfsmw/game"
 
           GAME_DIR="$RUNNER_TEMP/nfsmw/game"
 
-          test -f "$GAME_DIR/speed.exe" || { echo "ERROR: speed.exe missing."; exit 1; }
+          if [ ! -f "$GAME_DIR/speed.exe" ]; then
+            echo "ERROR: speed.exe missing."
+            exit 1
+          fi
 
           SPEED_SIZE="$(stat -f%z "$GAME_DIR/speed.exe")"
-          test "$SPEED_SIZE" = "6029312" || { echo "ERROR: Wrong speed.exe size."; exit 1; }
+
+          if [ "$SPEED_SIZE" != "6029312" ]; then
+            echo "ERROR: Wrong speed.exe size."
+            exit 1
+          fi
 
           for DIR in CARS FRONTEND GLOBAL SOUND TRACKS; do
-            test -d "$GAME_DIR/$DIR" || { echo "ERROR: Missing $DIR."; exit 1; }
+            if [ ! -d "$GAME_DIR/$DIR" ]; then
+              echo "ERROR: Missing $DIR."
+              exit 1
+            fi
           done
 
           echo "GAME_DIR=$GAME_DIR" >> "$GITHUB_ENV"
           echo "Game files verified."
 
-      - name: Setup and translate game
+      - name: Set up and translate game
         run: |
           set -euo pipefail
+
+          # setup.sh normally prefers Python 3.13.
+          # Place a Python 3.12-only shim first on PATH.
+          # This ensures setup.sh selects Python 3.12.
+          mkdir -p "$RUNNER_TEMP/python312-first"
+
+          cat > "$RUNNER_TEMP/python312-first/python3.13" <<'EOF'
+          #!/bin/sh
+          exit 1
+          EOF
+
+          chmod +x "$RUNNER_TEMP/python312-first/python3.13"
+
+          export PATH="$RUNNER_TEMP/python312-first:$PATH"
+
+          echo "Selected Python 3.12:"
+          python3.12 --version
+
           chmod +x ./setup.sh
           ./setup.sh "$GAME_DIR"
 
-          test -f build/recomp/gen/table.c || {
+          if [ ! -f build/recomp/gen/table.c ]; then
             echo "ERROR: Translation output missing."
             exit 1
-          }
+          fi
 
       - name: Build unsigned iOS app
         run: |
           set -euo pipefail
+
+          ./.venv/bin/python --version
 
           ./.venv/bin/python kit/tools/build.py \
             --game-dir "$GITHUB_WORKSPACE" \
@@ -89,9 +131,14 @@ jobs:
           set -euo pipefail
 
           APP="$(find build/ios -type d -name 'SpeedRecomp.app' -print -quit)"
-          test -n "$APP" || { echo "ERROR: iOS app missing."; exit 1; }
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: iOS app missing."
+            exit 1
+          fi
 
           mkdir -p artifacts/Payload
+
           ditto "$APP" artifacts/Payload/SpeedRecomp.app
 
           (
@@ -100,6 +147,7 @@ jobs:
           )
 
           rm -rf artifacts/Payload
+
           test -s artifacts/NFSMostWanted-iOS-unsigned.ipa
 
       - name: Upload IPA
