@@ -415,6 +415,7 @@ def parse_args(argv, system=None):
     parser.add_argument("--device", default=None, help="devicectl identifier (iOS) or adb serial (Android)")
     parser.add_argument("--team", default=os.environ.get("RECOMP_IOS_TEAM", ""),
                         help="Apple team id for automatic signing (ios target; default $RECOMP_IOS_TEAM)")
+    parser.add_argument("--unsigned", action="store_true", help="Build the real iOS app without Apple code signing or device installation")
     parser.add_argument("--no-install", action="store_true", help="Build the mobile app without installing it")
     parser.add_argument("--push-game", action="store_true",
                         help="Android: push the configured game install minus [bundle].exclude before launch")
@@ -422,7 +423,7 @@ def parse_args(argv, system=None):
     args = parser.parse_args(argv)
     if args.push_game and (args.target != "android" or args.no_install):
         parser.error("--push-game requires --target android without --no-install")
-    if args.target == "ios" and not args.stub and not args.team:
+    if args.target == "ios" and not args.stub and not args.team and not args.unsigned:
         parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
     if args.stub and (args.config == "Debug" or args.regenerate):
         parser.error("--stub cannot be combined with --config Debug or --regenerate")
@@ -478,9 +479,12 @@ def main():
                     parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"
                                  % args.build_root)
                 configure(preset, defines + ["-DRECOMP_IOS_TEAM=" + args.team], build_dir=build_dir)
-                extra = ["--", "CODE_SIGNING_ALLOWED=NO"] if args.stub else ["--", "-allowProvisioningUpdates"]
+                if args.unsigned or args.stub:
+                    extra = ["--", "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO"]
+                else:
+                    extra = ["--", "-allowProvisioningUpdates"]
                 build(preset, TARGETS["ios"], args.jobs, extra, build_dir=build_dir, config="Release")
-                if not args.stub and not args.no_install:
+                if not args.stub and not args.no_install and not args.unsigned:
                     app = ios_app_bundle(cfg["game"]["app_name"], args.build_root)
                     device = args.device or pick_device(devicectl_list())
                     install_and_launch(app, cfg["game"]["bundle_id"], device, args.console)

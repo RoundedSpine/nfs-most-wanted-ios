@@ -1,26 +1,7 @@
-name: iOS Build
+﻿name: iOS Build
 
 on:
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: Build type
-        required: true
-        default: Release
-        type: choice
-        options:
-          - Release
-          - Debug
-
-  push:
-    branches:
-      - main
-      - master
-
-  pull_request:
-    branches:
-      - main
-      - master
 
 permissions:
   contents: read
@@ -40,113 +21,90 @@ jobs:
 
       - name: Show toolchain
         run: |
+          set -euo pipefail
+          uname -m
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           cmake --version
-          clang --version
 
-      - name: Download NFS Most Wanted game
+      - name: Download and verify game
         env:
           MEGA_GAME_URL: ${{ secrets.MEGA_GAME_URL }}
         run: |
           set -euo pipefail
 
-          echo "Installing MEGA tools..."
-          brew install megatools
-
-          mkdir -p "$RUNNER_TEMP/nfsmw"
-
-          echo "Downloading NFS Most Wanted archive..."
-          megadl "$MEGA_GAME_URL" --path "$RUNNER_TEMP/nfsmw"
-
-          echo "Downloaded files:"
-          ls -lh "$RUNNER_TEMP/nfsmw"
-
-          ARCHIVE="$(find "$RUNNER_TEMP/nfsmw" -maxdepth 1 -type f -name '*.7z' -print -quit)"
-
-          if [ -z "$ARCHIVE" ]; then
-            echo "ERROR: No .7z archive was downloaded."
+          if [ -z "$MEGA_GAME_URL" ]; then
+            echo "ERROR: MEGA_GAME_URL secret is missing."
             exit 1
           fi
 
-          echo "Archive: $ARCHIVE"
-
-          echo "Installing 7-Zip..."
-          brew install sevenzip
-
-          echo "Extracting game..."
+          brew install megatools sevenzip
           mkdir -p "$RUNNER_TEMP/nfsmw/game"
+
+          megadl "$MEGA_GAME_URL" --path "$RUNNER_TEMP/nfsmw"
+
+          ARCHIVE="$(find "$RUNNER_TEMP/nfsmw" -maxdepth 1 -type f -name '*.7z' -print -quit)"
+          test -n "$ARCHIVE" || { echo "ERROR: Archive missing."; exit 1; }
 
           7zz x "$ARCHIVE" -o"$RUNNER_TEMP/nfsmw/game"
 
           GAME_DIR="$RUNNER_TEMP/nfsmw/game"
 
-          echo "Checking extracted game..."
-
-          if [ ! -f "$GAME_DIR/speed.exe" ]; then
-            echo "ERROR: speed.exe not found."
-            find "$GAME_DIR" -maxdepth 3 -type f | head -100
-            exit 1
-          fi
+          test -f "$GAME_DIR/speed.exe" || { echo "ERROR: speed.exe missing."; exit 1; }
 
           SPEED_SIZE="$(stat -f%z "$GAME_DIR/speed.exe")"
-
-          if [ "$SPEED_SIZE" != "6029312" ]; then
-            echo "ERROR: Unexpected speed.exe size: $SPEED_SIZE"
-            exit 1
-          fi
-
-          echo "speed.exe verified: $SPEED_SIZE bytes"
+          test "$SPEED_SIZE" = "6029312" || { echo "ERROR: Wrong speed.exe size."; exit 1; }
 
           for DIR in CARS FRONTEND GLOBAL SOUND TRACKS; do
-            if [ ! -d "$GAME_DIR/$DIR" ]; then
-              echo "ERROR: Missing required directory: $DIR"
-              exit 1
-            fi
+            test -d "$GAME_DIR/$DIR" || { echo "ERROR: Missing $DIR."; exit 1; }
           done
 
-          echo "All required NFS Most Wanted files verified."
+          echo "GAME_DIR=$GAME_DIR" >> "$GITHUB_ENV"
+          echo "Game files verified."
 
-      - name: Configure iOS build
+      - name: Setup and translate game
         run: |
-          chmod +x ./ios-build.sh
-          ./ios-build.sh --configure-only "${{ github.event.inputs.build_type || 'Release' }}"
+          set -euo pipefail
+          chmod +x ./setup.sh
+          ./setup.sh "$GAME_DIR"
 
-      - name: Build iOS
-        run: |
-          ./ios-build.sh --build-only "${{ github.event.inputs.build_type || 'Release' }}"
-
-      - name: Locate application
-        run: |
-          mkdir -p artifacts
-
-          APP="$(find . -type d -name '*.app' -print -quit)"
-
-          if [ -z "$APP" ]; then
-            echo "ERROR: No .app found."
+          test -f build/recomp/gen/table.c || {
+            echo "ERROR: Translation output missing."
             exit 1
-          fi
+          }
 
-          echo "Found app: $APP"
-
-          cp -R "$APP" artifacts/NFSMostWanted.app
-
-      - name: Create unsigned IPA
+      - name: Build unsigned iOS app
         run: |
+          set -euo pipefail
+
+          ./.venv/bin/python kit/tools/build.py \
+            --game-dir "$GITHUB_WORKSPACE" \
+            --target ios \
+            --config Release \
+            --unsigned \
+            --no-install
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+
+          APP="$(find build/ios -type d -name 'SpeedRecomp.app' -print -quit)"
+          test -n "$APP" || { echo "ERROR: iOS app missing."; exit 1; }
+
           mkdir -p artifacts/Payload
+          ditto "$APP" artifacts/Payload/SpeedRecomp.app
 
-          cp -R artifacts/NFSMostWanted.app artifacts/Payload/NFSMostWanted.app
+          (
+            cd artifacts
+            /usr/bin/zip -qry NFSMostWanted-iOS-unsigned.ipa Payload
+          )
 
-          cd artifacts
-          zip -qry NFSMostWanted-iOS-unsigned.ipa Payload
-          rm -rf Payload
+          rm -rf artifacts/Payload
+          test -s artifacts/NFSMostWanted-iOS-unsigned.ipa
 
-      - name: Upload build artifacts
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: NFSMostWanted-iOS
-          path: |
-            artifacts/NFSMostWanted.app
-            artifacts/NFSMostWanted-iOS-unsigned.ipa
-            build/**/*.dSYM
-          if-no-files-found: warn
+          name: NFSMostWanted-iOS-unsigned
+          path: artifacts/NFSMostWanted-iOS-unsigned.ipa
+          if-no-files-found: error
