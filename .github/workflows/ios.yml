@@ -37,13 +37,14 @@ jobs:
         with:
           xcode-version: "16.4"
 
-      - name: Show toolchain
+            - name: Show toolchain
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           cmake --version
           clang --version
-                - name: Download NFS Most Wanted game
+
+      - name: Download NFS Most Wanted game
         env:
           MEGA_GAME_URL: ${{ secrets.MEGA_GAME_URL }}
         run: |
@@ -71,7 +72,9 @@ jobs:
 
           echo "Extracting..."
           mkdir -p "$RUNNER_TEMP/nfsmw/game"
+
           brew install sevenzip
+
           7zz x "$ARCHIVE" -o"$RUNNER_TEMP/nfsmw/game"
 
           echo "Extracted game:"
@@ -94,6 +97,7 @@ jobs:
           echo "speed.exe verified: $SPEED_SIZE bytes"
 
           echo "Checking required game directories..."
+
           for DIR in CARS FRONTEND GLOBAL SOUND TRACKS; do
             if [ ! -d "$GAME_DIR/$DIR" ]; then
               echo "ERROR: Missing required directory: $DIR"
