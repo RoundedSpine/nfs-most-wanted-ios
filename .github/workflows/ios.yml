@@ -1,0 +1,119 @@
+name: iOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "CMake build type"
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    name: Build NFS Most Wanted for iOS
+    runs-on: macos-14
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          cmake --version
+          clang --version
+
+      - name: Configure iOS build
+        run: |
+          chmod +x ./ios-build.sh
+          ./ios-build.sh --configure-only \
+            "${{ github.event.inputs.build_type || 'Release' }}"
+
+      - name: Build iOS target
+        run: |
+          ./ios-build.sh --build-only \
+            "${{ github.event.inputs.build_type || 'Release' }}"
+
+      - name: Locate build products
+        id: products
+        shell: bash
+        run: |
+          set -e
+          mkdir -p artifacts
+
+          APP_PATH="$(find . -type d -name '*.app' -path '*iphoneos*' | head -n 1 || true)"
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH="$(find . -type d -name '*.app' | head -n 1 || true)"
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app bundle was produced."
+            echo "Build tree:"
+            find . -maxdepth 5 -type d | sort | head -n 500
+            exit 1
+          fi
+
+          echo "Found app: $APP_PATH"
+          ditto "$APP_PATH" "artifacts/NFSMostWanted.app"
+
+          # Create an unsigned IPA-style archive. This is useful for
+          # inspection and for later signing/sideloading workflows.
+          mkdir -p artifacts/Payload
+          ditto "$APP_PATH" "artifacts/Payload/$(basename "$APP_PATH")"
+          (
+            cd artifacts
+            zip -qry "NFSMostWanted-iOS-unsigned.ipa" Payload
+          )
+          rm -rf artifacts/Payload
+
+          # Preserve symbols when the build generates them.
+          DSYM="$(find . -type d -name '*.app.dSYM' | head -n 1 || true)"
+          if [ -n "$DSYM" ]; then
+            ditto "$DSYM" "artifacts/NFSMostWanted.app.dSYM"
+          fi
+
+      - name: Upload iOS app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSMostWanted-iOS-${{ github.sha }}
+          path: artifacts/NFSMostWanted.app
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSMostWanted-iOS-IPA-${{ github.sha }}
+          path: artifacts/NFSMostWanted-iOS-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload debug symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSMostWanted-iOS-dSYM-${{ github.sha }}
+          path: artifacts/NFSMostWanted.app.dSYM
+          if-no-files-found: ignore
+          retention-days: 14
