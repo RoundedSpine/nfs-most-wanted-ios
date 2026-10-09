@@ -291,8 +291,8 @@ void draw_text(unsigned i, const std::string &value, int x, int y, uint32_t flag
     const uint32_t t = text_buffer(i);
     const size_t n = std::min(value.size(), size_t(250));
     for (size_t j = 0; j < n; ++j)
-        wr16(t + j * 2, uint8_t(value[j]));
-    wr16(t + n * 2, 0);
+        wr16(t + uint32_t(j * 2), uint8_t(value[j]));
+    wr16(t + uint32_t(n * 2), 0);
     const uint32_t args[] = {out ? out : control(i) + 4,
                              uint32_t((x - 320) * 65536 / 640),
                              uint32_t(y * 65536 / 480),
