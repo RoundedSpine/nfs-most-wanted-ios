@@ -22,6 +22,7 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
 #include <algorithm>
 #include <atomic>
 #ifdef __APPLE__
@@ -152,11 +153,14 @@ static void os_audio_render_tap(void *user, AudioQueueProcessingTapRef tap, UInt
         memset(data->mBuffers[b].mData, 0, data->mBuffers[b].mDataByteSize);
 }
 
+#if !TARGET_OS_IPHONE
 static bool os_audio_device_value(AudioObjectID device, AudioObjectPropertySelector selector,
                                   AudioObjectPropertyScope scope, void *value, UInt32 size) {
     const AudioObjectPropertyAddress address{selector, scope, kAudioObjectPropertyElementMain};
     return !AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, value);
 }
+
+#endif // !TARGET_OS_IPHONE
 
 // This notification permits storage reuse. It is deliberately NOT counted as
 // sound reaching the speakers: queued/converted and presented are distinct.
@@ -544,7 +548,7 @@ void os_audio_output_close(OsAudioOutput *output) {
 #endif
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
 static void (*volatile g_os_audio_service_restart)(void);
 static OSStatus os_audio_service_restarted(AudioObjectID, UInt32, const AudioObjectPropertyAddress *, void *) {
     if (void (*callback)(void) = g_os_audio_service_restart)
@@ -553,7 +557,7 @@ static OSStatus os_audio_service_restarted(AudioObjectID, UInt32, const AudioObj
 }
 #endif
 void os_audio_on_service_restart(void (*callback)(void)) {
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
     static bool added = false;
     g_os_audio_service_restart = callback;
     if (added || !callback)
@@ -577,6 +581,15 @@ int os_audio_output_route(OsAudioOutput *output, OsAudioRoute *route) {
         return output->provider->route(output->provided, route);
     if (!output || !output->queue)
         return -1;
+#if TARGET_OS_IPHONE
+    // iOS manages output routing through its audio session; macOS AudioObject
+    // device enumeration and hardware properties are unavailable here.
+    route->follows_default = 1;
+    route->device_rate = output->rate;
+    route->device_channels = output->channels;
+    route->nominal_rate = output->rate;
+    return 0;
+#else
     CFStringRef uid = nullptr;
     UInt32 size = sizeof uid;
     AudioObjectID device = kAudioObjectUnknown;
@@ -641,6 +654,7 @@ int os_audio_output_route(OsAudioOutput *output, OsAudioRoute *route) {
     // ahead (8192 frames for 4096-frame slices) instead of about one I/O period.
     route->pipeline_frames = output->tap ? 2 * output->tap_max_frames : 0;
     return 0;
+#endif // TARGET_OS_IPHONE
 #else
     (void)output;
     return -1;
