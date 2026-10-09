@@ -1,0 +1,84 @@
+name: Check upstream updates
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out working iOS baseline
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Compare and prepare upstream update
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch https://github.com/elforeign/nfs-most-wanted-mac.git main
+          UPSTREAM_SHA="$(git rev-parse FETCH_HEAD)"
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          SHORT_SHA="${UPSTREAM_SHA:0:12}"
+          BRANCH="upstream-update/$SHORT_SHA"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+            echo "Upstream already included."
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "status=already-prepared" >> "$GITHUB_OUTPUT"
+            echo "Update branch already exists: $BRANCH"
+            exit 0
+          fi
+          git switch -c "$BRANCH"
+          if ! git merge --no-commit --no-ff "$UPSTREAM_SHA"; then
+            echo "status=conflicts" >> "$GITHUB_OUTPUT"
+            {
+              echo "Upstream commit: $UPSTREAM_SHA"
+              echo "Merge conflicts (manual iOS adaptation required):"
+              git diff --name-only --diff-filter=U
+            } > upstream-conflicts.txt
+            cat upstream-conflicts.txt
+            git merge --abort || true
+            exit 0
+          fi
+          git commit -m "Merge upstream elforeign/nfs-most-wanted-mac $SHORT_SHA"
+          git push origin "$BRANCH"
+          echo "status=prepared" >> "$GITHUB_OUTPUT"
+
+      - name: Open review pull request
+        if: steps.prepare.outputs.status == 'prepared'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+          SHA: ${{ steps.prepare.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Review upstream update ${SHA:0:12}" \
+            --body "Automated clean merge of upstream `elforeign/nfs-most-wanted-mac` at `$SHA`. **Do not merge until the iOS build and gameplay have been tested.** The known-working iOS main branch has not been changed."
+
+      - name: Save merge conflict report
+        if: steps.prepare.outputs.status == 'conflicts'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-merge-conflicts
+          path: upstream-conflicts.txt
