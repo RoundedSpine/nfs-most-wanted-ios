@@ -298,8 +298,7 @@ static void install_fps_toggle(SDL_Window *window) {
         SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, nullptr);
     if (!uiwindow)
         return;
-    RecompFpsToggle *button = [RecompFpsToggle buttonWithType:UIButtonTypeCustom];
-    button.frame = CGRectMake(10, 10, 76, 34);
+    RecompFpsToggle *button = [[RecompFpsToggle alloc] initWithFrame:CGRectMake(10, 10, 76, 34)];
     button.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
     button.titleLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightSemibold];
     button.layer.cornerRadius = 8;
