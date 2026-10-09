@@ -9,6 +9,8 @@
 #include "../audio.h"
 #include "../launcher/launcher_sdl.h"
 #include "../present.h"
+#include "../../mods/display_settings.h"
+#include "../../mods/settings_menu.h"
 #include "game_config.h"
 
 #import <CoreHaptics/CoreHaptics.h>
@@ -269,6 +271,45 @@ bool lifecycle_watch(void *, SDL_Event *e) {
 }
 } // namespace
 
+// A tiny native toggle that remains available when touch controls are in use.
+// The actual FPS/frametime overlay is already drawn by present_thread.cpp from
+// real presentation samples; this button only changes its saved display mode.
+@interface RecompFpsToggle : UIButton
+@end
+@implementation RecompFpsToggle
+- (void)refreshTitle {
+    const BOOL on = mods_display_value(DISPLAY_OVERLAY) != 0;
+    [self setTitle:(on ? @"FPS ON" : @"FPS OFF") forState:UIControlStateNormal];
+    self.backgroundColor = on ? [[UIColor colorWithRed:0.05 green:0.24 blue:0.17 alpha:0.80] colorWithAlphaComponent:0.80]
+                              : [UIColor colorWithWhite:0.05 alpha:0.65];
+}
+- (void)toggleFps:(id)sender {
+    (void)sender;
+    const int next = mods_display_value(DISPLAY_OVERLAY) ? 0 : 1;
+    mods_menu_main_thread_call([next] { mods_display_set(DISPLAY_OVERLAY, next); });
+    // The setting is queued onto the game thread; update the title on the
+    // following tap, and schedule a visual refresh after the frame hook.
+    [self setTitle:(next ? @"FPS ON" : @"FPS OFF") forState:UIControlStateNormal];
+}
+@end
+
+static void install_fps_toggle(SDL_Window *window) {
+    UIWindow *uiwindow = (__bridge UIWindow *)SDL_GetPointerProperty(
+        SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, nullptr);
+    if (!uiwindow)
+        return;
+    RecompFpsToggle *button = [RecompFpsToggle buttonWithType:UIButtonTypeCustom];
+    button.frame = CGRectMake(10, 10, 76, 34);
+    button.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
+    button.titleLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightSemibold];
+    button.layer.cornerRadius = 8;
+    button.clipsToBounds = YES;
+    button.accessibilityLabel = @"Toggle performance overlay";
+    [button refreshTitle];
+    [button addTarget:button action:@selector(toggleFps:) forControlEvents:UIControlEventTouchUpInside];
+    [uiwindow addSubview:button];
+}
+
 SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
                                       SDL_WindowFlags surface_flag, int *window_mode) {
     static bool watching = false;
@@ -280,6 +321,8 @@ SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
         title, 0, 0, surface_flag | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window_mode)
         *window_mode = 2;
+    if (w)
+        install_fps_toggle(w);
     return w;
 }
 
