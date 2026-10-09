@@ -81,7 +81,7 @@ GamePath platform_ui_resolve_game(const char *, std::string *error) {
 @end
 
 namespace {
-std::vector<NSURL *> g_scoped; // security-scoped URLs held for an import
+NSMutableArray<NSURL *> *g_scoped; // strongly retain security-scoped URLs until release
 NSMutableArray *g_delegates;   // picker delegates alive until they answer
 UIBackgroundTaskIdentifier g_background = UIBackgroundTaskInvalid;
 } // namespace
@@ -91,8 +91,11 @@ UIBackgroundTaskIdentifier g_background = UIBackgroundTaskInvalid;
     didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     std::vector<launcher::Picked> picked;
     for (NSURL *url in urls) {
-        if (self.scoped && [url startAccessingSecurityScopedResource])
-            g_scoped.push_back(url);
+        if (self.scoped && [url startAccessingSecurityScopedResource]) {
+            if (!g_scoped)
+                g_scoped = [NSMutableArray new];
+            [g_scoped addObject:url]; // retain across the asynchronous import
+        }
         launcher::Picked p;
         p.path = url.fileSystemRepresentation;
         p.name = url.lastPathComponent.UTF8String;
@@ -239,12 +242,14 @@ class IosPlatform final : public launcher::Platform {
                     err.localizedDescription.UTF8String);
     }
     void release(const launcher::Picked &p) override {
-        for (auto it = g_scoped.begin(); it != g_scoped.end(); ++it)
-            if (p.path == (*it).fileSystemRepresentation) {
-                [*it stopAccessingSecurityScopedResource];
-                g_scoped.erase(it);
+        for (NSUInteger i = 0; i < g_scoped.count; ++i) {
+            NSURL *url = g_scoped[i];
+            if (p.path == std::string(url.fileSystemRepresentation)) {
+                [url stopAccessingSecurityScopedResource];
+                [g_scoped removeObjectAtIndex:i]; // release strong reference after stopping access
                 return;
             }
+        }
     }
 
   private:
