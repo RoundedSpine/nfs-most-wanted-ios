@@ -657,8 +657,8 @@ void copy_readback_rows(void *context, size_t shard) {
     for (uint32_t i = 0; i < c.count; ++i) {
         auto r = c.rects[i];
         const uint32_t *sampled = c.sampled + c.offsets[i] * 2;
-        int first = r.y0 + (r.y1 - r.y0) * shard / c.workers;
-        int last = r.y0 + (r.y1 - r.y0) * (shard + 1) / c.workers;
+        int first = r.y0 + int((int64_t(r.y1) - r.y0) * int64_t(shard) / int64_t(c.workers));
+        int last = r.y0 + int((int64_t(r.y1) - r.y0) * int64_t(shard + 1) / int64_t(c.workers));
         for (int y = first; y < last; ++y)
             for (int x = r.x0; x < r.x1; ++x) {
                 size_t at = size_t(y - r.y0) * (r.x1 - r.x0) + (x - r.x0);
