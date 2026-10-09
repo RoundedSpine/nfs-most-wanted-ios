@@ -1,0 +1,25 @@
+name: iOS Performance Meter Tests
+
+on:
+  push:
+    branches:
+      - testing/performance-and-bugfixes
+    paths:
+      - kit/ios_perf_meter.h
+      - tests/ios_perf_meter_test.c
+      - .github/workflows/ios-perf-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test frame timing meter
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -O2 -I. tests/ios_perf_meter_test.c -lm -o /tmp/ios-perf-meter-test
+          /tmp/ios-perf-meter-test
