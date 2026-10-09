@@ -246,7 +246,7 @@ class IosPlatform final : public launcher::Platform {
         // it with the document-picker callback, which normally runs on the main thread.
         auto work = ^{
             const NSUInteger count = g_scoped.count;
-            fprintf(stderr, "[ios][picker] release requested; active scopes=%lu\\n",
+            fprintf(stderr, "[ios][picker] release requested; active scopes=%lu\n",
                     (unsigned long)count);
             for (NSUInteger i = 0; i < count; ++i) {
                 NSURL *url = g_scoped[i];
@@ -254,11 +254,11 @@ class IosPlatform final : public launcher::Platform {
                 if (rawPath && p.path == rawPath) {
                     [url stopAccessingSecurityScopedResource];
                     [g_scoped removeObjectAtIndex:i];
-                    fprintf(stderr, "[ios][picker] released scope\\n");
+                    fprintf(stderr, "[ios][picker] released scope\n");
                     return;
                 }
             }
-            fprintf(stderr, "[ios][picker] no matching active scope\\n");
+            fprintf(stderr, "[ios][picker] no matching active scope\n");
         };
         if ([NSThread isMainThread])
             work();
