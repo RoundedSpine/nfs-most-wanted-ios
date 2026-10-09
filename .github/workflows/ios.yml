@@ -183,6 +183,41 @@ jobs:
 
           test -s artifacts/NFSMostWanted-iOS-unsigned.ipa
 
+      - name: Verify IPA and collect debugging symbols
+        run: |
+          set -euo pipefail
+          IPA="artifacts/NFSMostWanted-iOS-unsigned.ipa"
+          test -s "$IPA"
+          unzip -tq "$IPA"
+          APP_PLIST="artifacts/Payload/SpeedRecomp.app/Info.plist"
+          mkdir -p artifacts/build-diagnostics
+          /usr/bin/unzip -p "$IPA" Payload/SpeedRecomp.app/Info.plist > artifacts/build-diagnostics/Info.plist
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' artifacts/build-diagnostics/Info.plist)"
+          test "$BUNDLE_ID" = "dev.recompkit.nfsmw" || {
+            echo "::error::Unexpected bundle identifier: $BUNDLE_ID"
+            exit 1
+          }
+          {
+            echo "source_commit=$GITHUB_SHA"
+            echo "source_ref=$GITHUB_REF"
+            echo "workflow_run=$GITHUB_RUN_ID"
+            echo "bundle_id=$BUNDLE_ID"
+            echo "ipa_sha256=$(shasum -a 256 "$IPA" | awk '{print $1}')"
+            echo "ios_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
+          } > artifacts/build-diagnostics/build-manifest.txt
+          find build/ios -type d -name '*.dSYM' -exec ditto {} artifacts/build-diagnostics/ \; || true
+          find build/ios -type f -name '*.bcsymbolmap' -exec cp {} artifacts/build-diagnostics/ \; || true
+          echo "Diagnostics files:"
+          find artifacts/build-diagnostics -maxdepth 2 -type f -print
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSMostWanted-iOS-build-diagnostics
+          path: artifacts/build-diagnostics/
+          if-no-files-found: warn
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
