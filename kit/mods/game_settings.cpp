@@ -64,7 +64,7 @@ void scroll_minimap(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *in
     }
     const uint32_t source = rd32(minimap_source), old = rd32(minimap_pixels);
     const uint32_t pitch = (std::max(256u, w) + 7u) & ~7u;
-    if (!w || !h || w > 3840 || h > 2160 || !source || !old || !gm_valid(source, uint64_t(w) * h)) {
+    if (!w || !h || w > 3840 || h > 2160 || !source || !old || !gm_valid(source, size_t(w) * h)) {
         minimap_pitch = 0;
         mods_hook_return(api, cpu, 0, 0);
         return;
