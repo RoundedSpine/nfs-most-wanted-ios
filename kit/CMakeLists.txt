@@ -1,3 +1,4 @@
+
 cmake_minimum_required(VERSION 3.24)
 project(PopulousRecomp LANGUAGES C CXX)
 if(APPLE)
@@ -104,14 +105,24 @@ include_directories(${CMAKE_BINARY_DIR}/generated)
 add_compile_definitions(GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE})
 add_compile_definitions(GUEST_HEAP_BASE=${RECOMP_HEAP_BASE})
 add_compile_definitions(GUEST_SIZE=${RECOMP_GUEST_SIZE})
-add_compile_definitions(GUEST_HEAP_EXTRA_BASE=${RECOMP_HEAP_EXTRA_BASE})
-add_compile_definitions(GUEST_HEAP_EXTRA_SIZE=${RECOMP_HEAP_EXTRA_SIZE})
+add_compile_definitions(GUEST_HEAP_EXTRA_BASE=${RECOMP_GUEST_HEAP_EXTRA_BASE})
+add_compile_definitions(GUEST_HEAP_EXTRA_SIZE=${RECOMP_GUEST_HEAP_EXTRA_SIZE})
 
+# Allow unsigned iOS builds without an Apple Developer Team ID.
 if(IOS)
+  option(RECOMP_IOS_UNSIGNED "Build iOS without Apple code signing" OFF)
   set(RECOMP_IOS_TEAM "$ENV{RECOMP_IOS_TEAM}" CACHE STRING "Apple development team for automatic signing")
-  if(RECOMP_IOS_TEAM STREQUAL "" AND NOT POP_TRANSLATE STREQUAL "STUB")
-    message(FATAL_ERROR "iOS builds need a signing team: set RECOMP_IOS_TEAM or pass tools/build.py --team; "
-                        "`security find-identity -v -p codesigning` lists them")
+
+  if(RECOMP_IOS_TEAM STREQUAL ""
+     AND NOT RECOMP_IOS_UNSIGNED
+     AND NOT POP_TRANSLATE STREQUAL "STUB")
+    message(FATAL_ERROR
+      "iOS builds need a signing team unless RECOMP_IOS_UNSIGNED=ON")
+  endif()
+
+  if(RECOMP_IOS_UNSIGNED)
+    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
   endif()
 endif()
 
@@ -128,7 +139,6 @@ if(POP_RECOMP_VERSION STREQUAL "unknown" AND GIT_FOUND)
   endif()
 endif()
 configure_file(${POP_ROOT}/host/version.h.in ${CMAKE_BINARY_DIR}/generated/version.h @ONLY)
-
 
 if(NOT IOS AND NOT ANDROID)
   enable_testing()
