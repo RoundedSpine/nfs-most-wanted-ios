@@ -30,3 +30,27 @@ This branch is an experimental development track. The known-playable `main` bran
 ## Current status
 
 Branch created. Overlay is specified but **not implemented or tested yet**. This document deliberately does not claim that FPS measurements are available.
+
+## Touch toggle implementation (experimental)
+
+The upstream renderer already provides a real presentation-based overlay in
+`kit/host/performance_overlay.cpp` and `kit/host/present_thread.cpp`.
+The on-device toggle was added to `kit/host/sdl/platform_ui_ios.mm`.
+
+- **FPS OFF** selects display overlay mode 0; **FPS ON** selects counters mode 1.
+- The native Display settings still allow **off / counters / graph** (mode 0/1/2).
+- The renderer's existing `FramePacingSnapshot` remains the source of truth.
+- The separate `kit/ios_perf_meter.h` is a unit-tested experimental utility,
+  **not** connected to the production renderer. Do not describe its 1% low
+  result as an on-screen metric until explicitly integrated.
+- The toggle runs through `mods_menu_main_thread_call` to preserve the
+  existing settings owner's thread affinity.
+
+### Build and test
+
+Run **Actions → iOS Build → Run workflow**, select
+`testing/performance-and-bugfixes`, and download the unsigned IPA artifact.
+Test in LiveContainer. Check that the button switches the overlay on and off,
+that its state survives app relaunch, that it doesn't obstruct gameplay or
+system gestures, and that pause/resume does not cause incorrect FPS spikes.
+The UI change has **not yet been compiled or verified on an iOS device**.
