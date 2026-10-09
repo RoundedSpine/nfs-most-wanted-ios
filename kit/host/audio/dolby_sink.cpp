@@ -17,6 +17,10 @@
 #include "sink.h"
 #include "dolby.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,7 +40,7 @@
 #include "../../mods/pop_mod_api.h"
 #include "../../dx/host_api.h"
 
-#if defined(__APPLE__) && defined(RECOMP_HAVE_FFMPEG)
+#if defined(__APPLE__) && defined(RECOMP_HAVE_FFMPEG) && !TARGET_OS_IPHONE
 #include <CoreAudio/CoreAudio.h>
 #include <pthread.h>
 #include <sys/qos.h>
