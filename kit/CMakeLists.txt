@@ -105,8 +105,8 @@ include_directories(${CMAKE_BINARY_DIR}/generated)
 add_compile_definitions(GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE})
 add_compile_definitions(GUEST_HEAP_BASE=${RECOMP_HEAP_BASE})
 add_compile_definitions(GUEST_SIZE=${RECOMP_GUEST_SIZE})
-add_compile_definitions(GUEST_HEAP_EXTRA_BASE=${RECOMP_GUEST_HEAP_EXTRA_BASE})
-add_compile_definitions(GUEST_HEAP_EXTRA_SIZE=${RECOMP_GUEST_HEAP_EXTRA_SIZE})
+add_compile_definitions(GUEST_HEAP_EXTRA_BASE=${RECOMP_HEAP_EXTRA_BASE})
+add_compile_definitions(GUEST_HEAP_EXTRA_SIZE=${RECOMP_HEAP_EXTRA_SIZE})
 
 # Allow unsigned iOS builds without an Apple Developer Team ID.
 if(IOS)
