@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Build the native app through CMake, regenerating original-game code only when needed.
 
@@ -288,11 +289,11 @@ def android_install_and_launch(apk, bundle_id, device=None, console=False, *, ga
                if len(fields := line.split()) == 2 and fields[1] == "device"]
     if not devices:
         if game_cfg is not None:
-            raise ValueError("No Android device attached; --push-game requires a ready device in adb devices")
-        print("No Android device attached; skipped install, launch and logcat.")
+            raise ValueError("No Android device attached; --push-game requires a ready adb device")
+        print("No Android device attached; skipped Android install, launch and logcat.")
         return
     if device is not None and device not in devices:
-        raise ValueError("Android device %s is not ready in adb devices" % device)
+        raise ValueError("Android device %s is not ready" % device)
     if device is None and len(devices) != 1:
         raise ValueError("Pass --device <adb serial>; ready Android devices: %s" % ", ".join(devices))
     command = [adb, "-s", device or devices[0]]
@@ -340,8 +341,8 @@ def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modul
     """Translate the image into `stage`, then each auxiliary module (game.toml
     [modules.aux.<key>]) into `stage/aux-<key>`, which cmake/Translate.cmake
     compiles into its own library. A module is translated under the same
-    --allow-table-gaps/--allow-unmodelled acceptances as the image: they are
-    the build's, and a module's listing has the same gaps a game's has."""
+    --allow-table-gaps/--allow-unmodelled acceptances as the image: a module's
+    listing has the same gaps a game's has."""
     command = [sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
                "--game", str(game_dir),
                "--report", str(Path(build_root) / "recomp/translate-report.json")]
@@ -415,7 +416,8 @@ def parse_args(argv, system=None):
     parser.add_argument("--device", default=None, help="devicectl identifier (iOS) or adb serial (Android)")
     parser.add_argument("--team", default=os.environ.get("RECOMP_IOS_TEAM", ""),
                         help="Apple team id for automatic signing (ios target; default $RECOMP_IOS_TEAM)")
-    parser.add_argument("--unsigned", action="store_true", help="Build the real iOS app without Apple code signing or device installation")
+    parser.add_argument("--unsigned", action="store_true",
+                        help="Build the real iOS app without Apple code signing or device installation")
     parser.add_argument("--no-install", action="store_true", help="Build the mobile app without installing it")
     parser.add_argument("--push-game", action="store_true",
                         help="Android: push the configured game install minus [bundle].exclude before launch")
@@ -478,7 +480,18 @@ def main():
                 if not args.stub and not (args.build_root / "recomp/gen/table.c").is_file():
                     parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"
                                  % args.build_root)
-                configure(preset, defines + ["-DRECOMP_IOS_TEAM=" + args.team], build_dir=build_dir)
+
+                # Configure signing for the iOS build.
+                # The CMake option allows a real unsigned build without a team.
+                configure(
+                    preset,
+                    defines + [
+                        "-DRECOMP_IOS_TEAM=" + args.team,
+                        "-DRECOMP_IOS_UNSIGNED=" + ("ON" if args.unsigned else "OFF"),
+                    ],
+                    build_dir=build_dir,
+                )
+
                 if args.unsigned or args.stub:
                     extra = ["--", "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO"]
                 else:
