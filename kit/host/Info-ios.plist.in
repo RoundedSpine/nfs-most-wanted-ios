@@ -13,7 +13,6 @@
     <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>MinimumOSVersion</key><string>17.0</string>
-    <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
     <key>UIRequiresFullScreen</key><true/>
     <key>UIStatusBarHidden</key><true/>
     <key>UIViewControllerBasedStatusBarAppearance</key><false/>
