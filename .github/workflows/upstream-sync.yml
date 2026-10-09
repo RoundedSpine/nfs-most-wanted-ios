@@ -17,68 +17,75 @@ jobs:
   check-upstream:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out working iOS baseline
+      - name: Check out iOS port
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
 
-      - name: Compare and prepare upstream update
-        id: prepare
+      - name: Check for new upstream commits
+        id: check
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch https://github.com/elforeign/nfs-most-wanted-mac.git main
-          UPSTREAM_SHA="$(git rev-parse FETCH_HEAD)"
-          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
-          SHORT_SHA="${UPSTREAM_SHA:0:12}"
-          BRANCH="upstream-update/$SHORT_SHA"
+          git remote add upstream https://github.com/elforeign/nfs-most-wanted-mac.git
+          git fetch upstream main
+          BASE="$(cat .github/upstream-baseline.sha)"
+          LATEST="$(git rev-parse upstream/main)"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          BRANCH="upstream-update/${LATEST:0:12}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
-            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
-            echo "Upstream already included."
+          git fetch upstream "$BASE"
+          if [ "$BASE" = "$LATEST" ]; then
+            echo "No new upstream commits."
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$BASE" "$LATEST"; then
+            echo "::warning::Upstream history changed. Manual review required."
             exit 0
           fi
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "status=already-prepared" >> "$GITHUB_OUTPUT"
-            echo "Update branch already exists: $BRANCH"
+            echo "Review branch already exists: $BRANCH"
             exit 0
           fi
           git switch -c "$BRANCH"
-          if ! git merge --no-commit --no-ff "$UPSTREAM_SHA"; then
-            echo "status=conflicts" >> "$GITHUB_OUTPUT"
-            {
-              echo "Upstream commit: $UPSTREAM_SHA"
-              echo "Merge conflicts (manual iOS adaptation required):"
-              git diff --name-only --diff-filter=U
-            } > upstream-conflicts.txt
-            cat upstream-conflicts.txt
-            git merge --abort || true
-            exit 0
-          fi
-          git commit -m "Merge upstream elforeign/nfs-most-wanted-mac $SHORT_SHA"
+          # Replaying only commits after the recorded baseline avoids merging
+          # unrelated repository histories into the working iOS port.
+          mapfile -t COMMITS < <(git rev-list --reverse --ancestry-path "$BASE..$LATEST")
+          for COMMIT in "${COMMITS[@]}"; do
+            if ! git cherry-pick "$COMMIT"; then
+              {
+                echo "Upstream base: $BASE"
+                echo "Latest upstream: $LATEST"
+                echo "Failed to apply: $COMMIT"
+                git status --short
+              } > upstream-conflicts.txt
+              git cherry-pick --abort || true
+              echo "Conflicts require manual porting; iOS main is unchanged."
+              exit 0
+            fi
+          done
+          printf '%s\n' "$LATEST" > .github/upstream-baseline.sha
+          git add .github/upstream-baseline.sha
+          git commit -m "Advance upstream baseline to ${LATEST:0:12}"
           git push origin "$BRANCH"
-          echo "status=prepared" >> "$GITHUB_OUTPUT"
+          echo "prepared=true" >> "$GITHUB_OUTPUT"
 
-      - name: Open review pull request
-        if: steps.prepare.outputs.status == 'prepared'
+      - name: Create review pull request
+        if: steps.check.outputs.prepared == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.prepare.outputs.branch }}
-          SHA: ${{ steps.prepare.outputs.upstream_sha }}
-        shell: bash
+          BRANCH: ${{ steps.check.outputs.branch }}
+          SHA: ${{ steps.check.outputs.latest }}
         run: |
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "Review upstream update ${SHA:0:12}" \
-            --body "Automated clean merge of upstream `elforeign/nfs-most-wanted-mac` at `$SHA`. **Do not merge until the iOS build and gameplay have been tested.** The known-working iOS main branch has not been changed."
+          gh pr create --base main --head "$BRANCH" \
+            --title "Review upstream changes ${SHA:0:12}" \
+            --body "New commits from elforeign/nfs-most-wanted-mac since the tracked baseline. Do not merge until the iOS build and gameplay have been tested."
 
-      - name: Save merge conflict report
-        if: steps.prepare.outputs.status == 'conflicts'
+      - name: Upload conflict report
+        if: hashFiles('upstream-conflicts.txt') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: upstream-merge-conflicts
+          name: upstream-conflicts
           path: upstream-conflicts.txt
