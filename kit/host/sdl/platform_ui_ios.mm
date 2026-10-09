@@ -242,14 +242,28 @@ class IosPlatform final : public launcher::Platform {
                     err.localizedDescription.UTF8String);
     }
     void release(const launcher::Picked &p) override {
-        for (NSUInteger i = 0; i < g_scoped.count; ++i) {
-            NSURL *url = g_scoped[i];
-            if (p.path == std::string(url.fileSystemRepresentation)) {
-                [url stopAccessingSecurityScopedResource];
-                [g_scoped removeObjectAtIndex:i]; // release strong reference after stopping access
-                return;
+        // Security-scoped URL access is a UIKit/Foundation operation. Serialize
+        // it with the document-picker callback, which normally runs on the main thread.
+        auto work = ^{
+            const NSUInteger count = g_scoped.count;
+            fprintf(stderr, "[ios][picker] release requested; active scopes=%lu\\n",
+                    (unsigned long)count);
+            for (NSUInteger i = 0; i < count; ++i) {
+                NSURL *url = g_scoped[i];
+                const char *rawPath = url.fileSystemRepresentation;
+                if (rawPath && p.path == rawPath) {
+                    [url stopAccessingSecurityScopedResource];
+                    [g_scoped removeObjectAtIndex:i];
+                    fprintf(stderr, "[ios][picker] released scope\\n");
+                    return;
+                }
             }
-        }
+            fprintf(stderr, "[ios][picker] no matching active scope\\n");
+        };
+        if ([NSThread isMainThread])
+            work();
+        else
+            dispatch_sync(dispatch_get_main_queue(), work);
     }
 
   private:
