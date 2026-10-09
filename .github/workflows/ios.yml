@@ -79,6 +79,23 @@ jobs:
             }
           done
 
+          # Optional visual packs supplied by the user's own game archive.
+          # Validate their structure without failing builds that intentionally omit them.
+          TEX_DIR="$GAME_DIR/TRACKS/TexWizardX360"
+          if [ -f "$TEX_DIR/meta.json" ] && [ -f "$TEX_DIR/textures.bin" ]; then
+            echo "Optional Xbox 360 textures: present."
+          elif [ -e "$TEX_DIR" ]; then
+            echo "::warning::TexWizardX360 exists but meta.json or textures.bin is missing."
+          else
+            echo "Optional Xbox 360 textures: not supplied."
+          fi
+
+          if [ -s "$GAME_DIR/scripts/XenonEffects.tpk" ]; then
+            echo "Optional XenonEffects.tpk: present."
+          else
+            echo "Optional XenonEffects.tpk: not supplied."
+          fi
+
           echo "GAME_DIR=$GAME_DIR" >> "$GITHUB_ENV"
           echo "Game files verified."
 
