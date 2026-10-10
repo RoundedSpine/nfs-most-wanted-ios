@@ -67,7 +67,7 @@ static void ios_metal_diag(const char *phase, uint64_t serial, id<MTLCommandBuff
         FILE *out = fopen(file.fileSystemRepresentation, "a");
         if (!out) return;
         const uint64_t ms = (uint64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
-        fprintf(out, "%llu %s serial=%llu status=%ld error=%s\\n",
+        fprintf(out, "%llu %s serial=%llu status=%ld error=%s\n",
                 (unsigned long long)ms, phase, (unsigned long long)serial,
                 cb ? (long)cb.status : -1L,
                 cb.error ? cb.error.localizedDescription.UTF8String : "none");
