@@ -988,17 +988,48 @@ static int native_flags(int flags) {
         f |= O_TRUNC;
     return f;
 }
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+static void ios_file_trace(const char *op, int fd, const char *path, int64_t amount) {
+    // Thread-local guard prevents diagnostic file I/O from tracing itself.
+    static thread_local bool inside = false;
+    if (inside) return;
+    inside = true;
+    const char *home = getenv("HOME");
+    if (home) {
+        char file[4096];
+        snprintf(file, sizeof(file), "%s/Documents/diagnostics/file-events.log", home);
+        FILE *out = fopen(file, "a");
+        if (out) {
+            struct timeval tv;
+            gettimeofday(&tv, nullptr);
+            fprintf(out, "%lld %s fd=%d bytes=%lld path=%s\n",
+                    (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000,
+                    op, fd, (long long)amount, path ? path : "-");
+            fclose(out);
+        }
+    }
+    inside = false;
+}
+#else
+static void ios_file_trace(const char *, int, const char *, int64_t) {}
+#endif
 int os_fd_open(const char *path, int flags) {
-    return open(path, native_flags(flags), 0644);
+    int fd = open(path, native_flags(flags), 0644);
+    ios_file_trace("open", fd, path, flags);
+    return fd;
 }
 int64_t os_fd_read(int fd, void *buf, size_t n) {
-    return (int64_t)read(fd, buf, n);
+    int64_t got = (int64_t)read(fd, buf, n);
+    ios_file_trace("read", fd, nullptr, got);
+    return got;
 }
 int64_t os_fd_write(int fd, const void *buf, size_t n) {
     return (int64_t)write(fd, buf, n);
 }
 int64_t os_fd_seek(int fd, int64_t off, int whence) {
-    return (int64_t)lseek(fd, (off_t)off, whence);
+    int64_t result = (int64_t)lseek(fd, (off_t)off, whence);
+    ios_file_trace("seek", fd, nullptr, result);
+    return result;
 }
 int os_fd_close(int fd) {
     return close(fd);
