@@ -1027,6 +1027,7 @@ static void ios_file_trace(const char *op, int fd, const char *path, int64_t amo
     inside = false;
 }
 #else
+static bool ios_file_trace_enabled() { return false; }
 static void ios_file_trace(const char *, int, const char *, int64_t, int64_t = -1, int = 0) {}
 #endif
 int os_fd_open(const char *path, int flags) {
