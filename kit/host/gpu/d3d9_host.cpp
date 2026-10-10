@@ -755,6 +755,24 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
     t->submitted();
 }
 void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // Called on the guest/game thread. A separate monitor records whether it stops advancing.
+    static std::atomic<uint64_t> frame_count{0};
+    static std::atomic<bool> watchdog_started{false};
+    frame_count.fetch_add(1, std::memory_order_relaxed);
+    if (!watchdog_started.exchange(true)) {
+        std::thread([&frame_count] {
+            uint64_t previous = 0;
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                const uint64_t current = frame_count.load(std::memory_order_relaxed);
+                ios_gpu_trace("game_thread_heartbeat", (uint32_t)current,
+                              (uint32_t)(current - previous), 0);
+                previous = current;
+            }
+        }).detach();
+    }
+#endif
     recomp_ab::tick(); // TEST ONLY phase of an in-run A/B; nothing unless RECOMP_AB_PERIOD is set
     {
         static const bool stats = recomp_env("D3D9_STATS") != nullptr;
