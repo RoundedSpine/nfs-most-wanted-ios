@@ -437,6 +437,23 @@ class RenderThread {
                     admission_totals.received_serial_sum += d.admission.serial;
                     admission_totals.last_received = d.admission.serial;
                 }
+                // Validate the complete serialized draw before constructing any pointers.
+                // A corrupt count or offset must never escape into the Metal worker.
+                auto fits = [&](size_t at, size_t n) {
+                    return at <= b.bytes.size() && n <= b.bytes.size() - at;
+                };
+                const uint64_t vc_bytes = uint64_t(d.vconst_count) * 16u;
+                const uint64_t pc_bytes = uint64_t(d.pconst_count) * 16u;
+                const uint64_t payload_bytes = uint64_t(d.decl_size) + vc_bytes + pc_bytes +
+                    uint64_t(d.inline_bytes) + uint64_t(d.inline_index_bytes) + uint64_t(cmd.a);
+                constexpr size_t state_bytes = 16u * 14u * 4u + 256u * 4u + 256u;
+                if (vc_bytes > SIZE_MAX || pc_bytes > SIZE_MAX ||
+                    payload_bytes > SIZE_MAX || !fits(cmd.at, size_t(payload_bytes)) ||
+                    !fits(cmd.state_at, state_bytes)) {
+                    fprintf(stderr, "d3d9: rejected malformed serialized draw (payload=%llu state=%zu size=%zu)\\n",
+                            (unsigned long long)payload_bytes, cmd.state_at, b.bytes.size());
+                    break;
+                }
                 size_t at = cmd.at;
                 auto take = [&](size_t n) -> const uint8_t * {
                     const uint8_t *p = n ? base + at : nullptr;
