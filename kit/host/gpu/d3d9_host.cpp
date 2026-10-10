@@ -179,11 +179,18 @@ void deliver_readback(uint32_t ticket, uint64_t request, const uint8_t *bytes, u
         return; // superseded or forgotten
     Readback &r = it->second;
     r.done = true;
-    r.failed = !bytes;
+    // Validate untrusted dimensions before forming a pointer or allocating storage.
+    // The producer supplies tightly packed RGBA8 pixels.
+    const uint64_t row_bytes = uint64_t(w) * 4u;
+    const uint64_t total_bytes = row_bytes * uint64_t(h);
+    const bool valid = bytes && w && h && row_bytes <= UINT32_MAX &&
+                       total_bytes <= SIZE_MAX && total_bytes <= (256ull << 20);
+    r.failed = !valid;
     r.w = w;
     r.h = h;
-    if (bytes)
-        r.bytes.assign(bytes, bytes + (size_t)w * h * 4u);
+    r.bytes.clear();
+    if (valid)
+        r.bytes.assign(bytes, bytes + size_t(total_bytes));
 }
 
 // Producer writes entries/forwarding; consumer writes receipt. Present's existing
@@ -645,10 +652,16 @@ int host_d9_texture_read_poll(uint32_t ticket, uint8_t *bytes, uint32_t pitch, u
     const Readback &r = it->second;
     if (!r.done)
         return 0;
-    if (r.failed || r.w != w || r.h != h || !bytes || pitch < w * 4u)
+    const uint64_t row_bytes = uint64_t(w) * 4u;
+    const uint64_t total_bytes = row_bytes * uint64_t(h);
+    if (r.failed || r.w != w || r.h != h || !bytes || !w || !h ||
+        row_bytes > UINT32_MAX || pitch < row_bytes ||
+        total_bytes > SIZE_MAX || total_bytes > (256ull << 20) ||
+        r.bytes.size() != size_t(total_bytes))
         return -1;
     for (uint32_t y = 0; y < h; ++y)
-        memcpy(bytes + (size_t)y * pitch, r.bytes.data() + (size_t)y * w * 4u, (size_t)w * 4u);
+        memcpy(bytes + size_t(y) * pitch, r.bytes.data() + size_t(y) * size_t(row_bytes),
+               size_t(row_bytes));
     return 1;
 }
 void host_d9_texture_read_forget(uint32_t ticket) {
