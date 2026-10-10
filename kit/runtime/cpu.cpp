@@ -36,11 +36,18 @@ void guest_pc_sample(uint32_t target) {
     g_last_guest_target.store(target, std::memory_order_relaxed);
     const uint64_t n = g_guest_dispatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
     // Sample at a dispatch boundary; this is a function entry, not every guest instruction.
-    if ((n & 4095u) != 0) return;
+    // Sample 1/64 dispatch boundaries for better coverage during rapid streaming.
+    // This is intentionally sampled rather than every instruction to limit I/O.
+    if ((n & 63u) != 0) return;
     const char *home = getenv("HOME");
     if (!home) return;
     char path[1024];
     snprintf(path, sizeof(path), "%s/Documents/diagnostics/guest-pc.log", home);
+    // Keep a rolling window of dispatches without unbounded storage growth.
+    if ((n & 262143u) == 0) {
+        FILE *reset = fopen(path, "w");
+        if (reset) fclose(reset);
+    }
     FILE *out = fopen(path, "a");
     if (!out) return;
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
