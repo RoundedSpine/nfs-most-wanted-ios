@@ -51,6 +51,8 @@ int g_crash_fd = -1;
 // report and matching dSYM are still needed for full symbolicated stacks.
 void ios_fatal_signal(int signo, siginfo_t *info, void *) {
     static const char prefix[] = "fatal signal ";
+    // Include the fault address in the async-signal-safe log as hexadecimal.
+    static const char addr_prefix[] = " address=0x";
     static const char suffix[] = "\n";
     char number[24];
     unsigned int n = signo < 0 ? 0u : static_cast<unsigned int>(signo);
@@ -59,6 +61,15 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *) {
     if (g_crash_fd >= 0) {
         (void)write(g_crash_fd, prefix, sizeof(prefix) - 1);
         while (pos) { --pos; (void)write(g_crash_fd, &number[pos], 1); }
+        (void)write(g_crash_fd, addr_prefix, sizeof(addr_prefix) - 1);
+        uintptr_t address = info ? reinterpret_cast<uintptr_t>(info->si_addr) : 0;
+        char hex[2 * sizeof(uintptr_t)];
+        const char digits[] = "0123456789abcdef";
+        for (unsigned int i = 0; i < sizeof(hex); ++i) {
+            hex[sizeof(hex) - i - 1] = digits[address & 15u];
+            address >>= 4;
+        }
+        (void)write(g_crash_fd, hex, sizeof(hex));
         (void)write(g_crash_fd, suffix, sizeof(suffix) - 1);
     }
     // Re-raise with the default disposition to preserve the iOS crash report.
