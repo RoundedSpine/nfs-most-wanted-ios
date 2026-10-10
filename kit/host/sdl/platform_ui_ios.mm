@@ -26,6 +26,32 @@
 
 namespace fs = std::filesystem;
 
+#include <mutex>
+#include <chrono>
+
+namespace {
+std::mutex g_diag_mutex;
+void ios_diagnostic(const char *event) {
+    std::lock_guard<std::mutex> lock(g_diag_mutex);
+    @autoreleasepool {
+        NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        if (!dirs.count) return;
+        NSString *folder = [dirs[0] stringByAppendingPathComponent:@"diagnostics"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:folder
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *file = [folder stringByAppendingPathComponent:@"session.log"];
+        FILE *out = fopen(file.fileSystemRepresentation, "a");
+        if (!out) return;
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+        fprintf(out, "%lld %s\n", (long long)ms, event);
+        fflush(out);
+        fclose(out);
+    }
+}
+}
+
+
 namespace {
 
 std::string bundle_dir() {
@@ -53,6 +79,7 @@ void platform_ui_init_hints() {
     // RECOMP_* switches for a device with no shell: Documents/switches.txt,
     // put there with devicectl (see tools/ios_logs.py for the container).
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
+    ios_diagnostic("platform init");
 }
 
 // Documents/game when it is ready. Anything else - no game yet, a bundled copy
@@ -242,6 +269,7 @@ class IosPlatform final : public launcher::Platform {
                     err.localizedDescription.UTF8String);
     }
     void release(const launcher::Picked &p) override {
+        ios_diagnostic("picker release requested");
         // Security-scoped URL access is a UIKit/Foundation operation. Serialize
         // it with the document-picker callback, which normally runs on the main thread.
         auto work = ^{
@@ -255,10 +283,12 @@ class IosPlatform final : public launcher::Platform {
                     [url stopAccessingSecurityScopedResource];
                     [g_scoped removeObjectAtIndex:i];
                     fprintf(stderr, "[ios][picker] released scope\n");
+                    ios_diagnostic("picker scope released");
                     return;
                 }
             }
             fprintf(stderr, "[ios][picker] no matching active scope\n");
+            ios_diagnostic("picker release had no matching scope");
         };
         if ([NSThread isMainThread])
             work();
