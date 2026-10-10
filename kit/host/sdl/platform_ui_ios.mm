@@ -28,9 +28,96 @@ namespace fs = std::filesystem;
 
 #include <mutex>
 #include <chrono>
+#include <atomic>
+#include <csignal>
+#include <fcntl.h>
+#include <unistd.h>
+#include <mach/mach.h>
+#include <pthread.h>
+#include <thread>
+#include <execinfo.h>
+
 
 namespace {
 std::mutex g_diag_mutex;
+void ios_diagnostic(const char *event);
+
+std::atomic<bool> g_crash_monitor_started{false};
+int g_crash_fd = -1;
+
+// The signal handler only uses async-signal-safe operations. The native .ips
+// report and matching dSYM are still needed for full symbolicated stacks.
+void ios_fatal_signal(int signo, siginfo_t *info, void *) {
+    static const char prefix[] = "fatal signal ";
+    static const char suffix[] = "\n";
+    char number[24];
+    unsigned int n = signo < 0 ? 0u : static_cast<unsigned int>(signo);
+    int pos = 0;
+    do { number[pos++] = char('0' + n % 10); n /= 10; } while (n && pos < 20);
+    if (g_crash_fd >= 0) {
+        (void)write(g_crash_fd, prefix, sizeof(prefix) - 1);
+        while (pos) { --pos; (void)write(g_crash_fd, &number[pos], 1); }
+        (void)write(g_crash_fd, suffix, sizeof(suffix) - 1);
+    }
+    // Re-raise with the default disposition to preserve the iOS crash report.
+    struct sigaction def = {};
+    def.sa_handler = SIG_DFL;
+    sigemptyset(&def.sa_mask);
+    sigaction(signo, &def, nullptr);
+    kill(getpid(), signo);
+    _exit(128 + signo);
+}
+
+void ios_uncaught_exception(NSException *exception) {
+    NSString *folder = [NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+        stringByAppendingPathComponent:@"diagnostics"];
+    NSString *path = [folder stringByAppendingPathComponent:@"exception.log"];
+    NSString *message = [NSString stringWithFormat:
+        @"Exception: %@\nReason: %@\nStack:\n%@\n",
+        exception.name, exception.reason,
+        [exception.callStackSymbols componentsJoinedByString:@"\n"]];
+    [message writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+void ios_start_crash_monitor() {
+    if (g_crash_monitor_started.exchange(true)) return;
+    @autoreleasepool {
+        NSArray *dirs = NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory, NSUserDomainMask, YES);
+        if (!dirs.count) return;
+        NSString *folder = [dirs[0] stringByAppendingPathComponent:@"diagnostics"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:folder
+                    withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *crash = [folder stringByAppendingPathComponent:@"fatal-signal.log"];
+        g_crash_fd = open(crash.fileSystemRepresentation, O_CREAT | O_WRONLY | O_APPEND, 0600);
+    }
+    NSSetUncaughtExceptionHandler(&ios_uncaught_exception);
+    for (int signo : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}) {
+        struct sigaction action = {};
+        action.sa_sigaction = ios_fatal_signal;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = SA_SIGINFO;
+        sigaction(signo, &action, nullptr);
+    }
+    std::thread([] {
+        while (true) {
+            task_vm_info_data_t vm = {};
+            mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            kern_return_t kr = task_info(mach_task_self(), TASK_VM_INFO,
+                                         reinterpret_cast<task_info_t>(&vm), &count);
+            if (kr == KERN_SUCCESS) {
+                char line[160];
+                snprintf(line, sizeof(line), "memory physical_footprint=%llu resident=%llu",
+                         (unsigned long long)vm.phys_footprint,
+                         (unsigned long long)vm.resident_size);
+                ios_diagnostic(line);
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+    }).detach();
+}
+
 void ios_diagnostic(const char *event) {
     std::lock_guard<std::mutex> lock(g_diag_mutex);
     @autoreleasepool {
@@ -79,6 +166,7 @@ void platform_ui_init_hints() {
     // RECOMP_* switches for a device with no shell: Documents/switches.txt,
     // put there with devicectl (see tools/ios_logs.py for the container).
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
+    ios_start_crash_monitor();
     ios_diagnostic("platform init");
 }
 
