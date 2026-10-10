@@ -56,29 +56,6 @@
 #include <unordered_map>
 #include <vector>
 
-#if TARGET_OS_IPHONE
-static void ios_metal_diag(const char *phase, uint64_t serial, id<MTLCommandBuffer> cb = nil) {
-    @autoreleasepool {
-        NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        if (!dirs.count) return;
-        NSString *folder = [dirs[0] stringByAppendingPathComponent:@"diagnostics"];
-        [[NSFileManager defaultManager] createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString *file = [folder stringByAppendingPathComponent:@"metal-commands.log"];
-        FILE *out = fopen(file.fileSystemRepresentation, "a");
-        if (!out) return;
-        const uint64_t ms = (uint64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
-        fprintf(out, "%llu %s serial=%llu status=%ld error=%s\n",
-                (unsigned long long)ms, phase, (unsigned long long)serial,
-                cb ? (long)cb.status : -1L,
-                cb.error ? cb.error.localizedDescription.UTF8String : "none");
-        fflush(out);
-        fclose(out);
-    }
-}
-#else
-static void ios_metal_diag(const char *, uint64_t, id<MTLCommandBuffer> = nil) {}
-#endif
-
 namespace {
 
 using namespace d9gpu;
@@ -896,7 +873,8 @@ class Renderer final : public D9Backend {
         MTLVertexDescriptor *vd = nil;
         (void)vd;
         zero_ = [mtl_ newBufferWithLength:64 options:MTLResourceStorageModeShared];
-        memset(zero_.contents, 0, 64);
+        if (zero_ && zero_.contents)
+            memset(zero_.contents, 0, 64);
         const char *trace = recomp_env("D3D9_TRACE");
         if (trace && !strcmp(trace, "1")) {
             capture_mode_ = recomp_env("D3D9_CAPTURE_SESSION") != nullptr;
@@ -919,6 +897,11 @@ class Renderer final : public D9Backend {
     }
 
     ~Renderer() override {
+        // Submit pending work and drain all three frame slots before
+        // completion handlers can outlive renderer-owned state.
+        flush();
+        for (int i = 0; i < 3; ++i)
+            dispatch_semaphore_wait(frames_, DISPATCH_TIME_FOREVER);
         if (capture_mode_ && capture_control_.state == capture_state::Capturing)
             capture_save();
         if (capture_job_.valid()) {
@@ -1098,6 +1081,13 @@ class Renderer final : public D9Backend {
         uint32_t w = std::max<uint32_t>((uint32_t)t.desc.width >> level, 1);
         uint32_t h = std::max<uint32_t>(
             (uint32_t)(t.desc.kind == HOST_D9_TEX_CUBE ? t.desc.width : t.desc.height) >> level, 1);
+        // Metal and the conversion routines read a full source row. Reject
+        // undersized pitches before touching caller-owned memory.
+        const uint64_t min_pitch = t.info.block
+            ? ((uint64_t(w) + 3) / 4) * t.info.bytes
+            : uint64_t(w) * t.info.bytes;
+        if (!t.info.bytes || min_pitch > UINT32_MAX || pitch < min_pitch)
+            return;
         if (volume) {
             // The API supplies one independently pitched Z slice. Conversion
             // and lifetime follow the same settled-resource rules as 2D uploads.
@@ -1203,6 +1193,8 @@ class Renderer final : public D9Backend {
             return true;
         }
         if (t.scale == 1.0f) {
+            if (!t.info.bytes || uint64_t(pw) * t.info.bytes > pitch)
+                return false;
             [t.texture getBytes:bytes
                     bytesPerRow:pitch
                   bytesPerImage:0
@@ -1214,6 +1206,8 @@ class Renderer final : public D9Backend {
         // A scaled target reads back at the game's size, one sample per pixel.
         uint32_t w = std::max<uint32_t>(t.desc.width >> level, 1);
         uint32_t h = std::max<uint32_t>(t.desc.height >> level, 1);
+        if (t.info.bytes != 4 || uint64_t(w) * 4 > pitch)
+            return false;
         std::vector<uint8_t> full((size_t)pw * ph * 4);
         [t.texture getBytes:full.data()
                 bytesPerRow:pw * 4
@@ -1299,9 +1293,10 @@ class Renderer final : public D9Backend {
     // ---- buffers --------------------------------------------------------
     void buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes,
                        uint32_t size) override {
-        Buf &b = buffers_[id];
-        if (offset + size > total || !bytes)
+        // Avoid uint32_t overflow when checking the upload range.
+        if (!bytes || offset > total || size > total - offset)
             return;
+        Buf &b = buffers_[id];
         if (trace_)
             trace_->event("buffer_before_upload", trace_context(), trace_buffer(id));
         if (b.shadow.size() < total)
@@ -1681,6 +1676,12 @@ class Renderer final : public D9Backend {
                     if (tr)
                         tr->result = d9trace::Result::MissingVertexBuffer;
                     skip("missing vertex buffer");
+                    return;
+                }
+                if (st.offset >= b->second.buffer.length) {
+                    if (tr)
+                        tr->result = d9trace::Result::MissingVertexBuffer;
+                    skip("vertex buffer offset outside allocation");
                     return;
                 }
                 b->second.used = serial_;
@@ -2971,9 +2972,7 @@ class Renderer final : public D9Backend {
         uint64_t serial = serial_;
         std::atomic<uint64_t> *done = &completed_;
         std::atomic<uint64_t> *gpu_us = &gpu_us_;
-        ios_metal_diag("created", serial, cmd_);
         [cmd_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
-          ios_metal_diag("completed", serial, cb);
           if (cb.GPUEndTime > cb.GPUStartTime) {
               const uint64_t us = (uint64_t)((cb.GPUEndTime - cb.GPUStartTime) * 1e6);
               gpu_us->fetch_add(us);
@@ -2994,9 +2993,7 @@ class Renderer final : public D9Backend {
             vis_pool_.emplace_back(vis_, serial_);
             vis_ = nil;
         }
-        ios_metal_diag("submitting", serial_, cmd_);
         [cmd_ commit];
-        ios_metal_diag("submitted", serial_, cmd_);
         if (trace_) {
             submitted_ = serial_;
             trace_->event("submit", trace_context());
@@ -3479,9 +3476,15 @@ class Renderer final : public D9Backend {
         // As many as the program reads, so its own defs always land and a
         // read past what the game set is zero rather than past the buffer.
         uint32_t n = std::max<uint32_t>(std::max<uint32_t>(count, p.max_const), 1);
-        constants_.assign(n * 4, 0.0f);
+        // Metal set*Bytes is intended for small constant payloads. Reject
+        // impossible/corrupt counts before multiplying or allocating.
+        if (n > 4096) {
+            fprintf(stderr, "d3d9 metal: excessive shader constants: %u\n", n);
+            return;
+        }
+        constants_.assign(size_t(n) * 4, 0.0f);
         if (c && count)
-            memcpy(constants_.data(), c, count * 4 * sizeof(float));
+            memcpy(constants_.data(), c, size_t(count) * 4 * sizeof(float));
         for (const auto &def : p.defs)
             if (def.first < n)
                 memcpy(&constants_[def.first * 4], def.second.data(), 4 * sizeof(float));
@@ -3501,26 +3504,39 @@ class Renderer final : public D9Backend {
             return;
         }
         id<MTLBuffer> b = transient(size);
+        if (!b || !b.contents)
+            return;
         memcpy((uint8_t *)b.contents + transient_used_ - size, bytes, size);
         [enc_ setVertexBuffer:b offset:transient_used_ - size atIndex:slot];
     }
     // Space in this frame's upload buffer; returns the buffer, with the space
     // ending at transient_used_.
     id<MTLBuffer> transient(uint32_t size) {
-        uint32_t aligned = (size + 15) & ~15u;
-        if (!transient_ || transient_used_ + aligned > transient_.length) {
-            NSUInteger len = std::max<NSUInteger>(4u << 20, aligned);
-            transient_ = [mtl_ newBufferWithLength:len options:MTLResourceStorageModeShared];
+        const uint64_t aligned = (uint64_t(size) + 15u) & ~uint64_t(15);
+        if (aligned > UINT32_MAX)
+            return nil;
+        if (!transient_ || uint64_t(transient_used_) + aligned > transient_.length) {
+            const NSUInteger len = std::max<NSUInteger>(4u << 20, (NSUInteger)aligned);
+            id<MTLBuffer> next = [mtl_ newBufferWithLength:len
+                                                  options:MTLResourceStorageModeShared];
+            if (!next)
+                return nil;
+            transient_ = next;
             note_alloc(AS_TRANSIENT, transient_, len, 1, 1, 0);
             transient_used_ = 0;
         }
-        transient_used_ += aligned;
+        transient_used_ += (uint32_t)aligned;
         return transient_;
     }
 
     d9trace::Result encode_primitives(const HostD9Draw &d) {
         MTLPrimitiveType type;
         uint32_t count = d.primitive_count;
+        // Primitive-to-index expansion must not wrap a 32-bit count.
+        if ((d.primitive == 2 && count > UINT32_MAX / 2) ||
+            (d.primitive == 4 && count > UINT32_MAX / 3) ||
+            ((d.primitive == 3 || d.primitive == 5) && count > UINT32_MAX - 2))
+            return d9trace::Result::IndexRange;
         bool fan = false;
         switch (d.primitive) {
         case 1:
@@ -3563,7 +3579,7 @@ class Renderer final : public D9Backend {
                 auto b = buffers_.find(d.index_buffer);
                 if (b == buffers_.end() || !b->second.buffer)
                     return d9trace::Result::MissingIndexBuffer;
-                if ((uint64_t)(d.start + count) * isize > b->second.buffer.length)
+                if ((uint64_t(d.start) + count) * isize > b->second.buffer.length)
                     return d9trace::Result::IndexRange;
                 b->second.used = serial_;
                 [enc_ drawIndexedPrimitives:type
@@ -3575,20 +3591,34 @@ class Renderer final : public D9Backend {
                                  baseVertex:d.base_vertex
                                baseInstance:0];
             } else {
-                id<MTLBuffer> b = transient(count * isize);
-                memcpy((uint8_t *)b.contents + transient_used_ - ((count * isize + 15) & ~15u),
-                       d.inline_indices, count * isize);
+                const uint64_t byte_count = uint64_t(count) * isize;
+                if (byte_count > UINT32_MAX - 15)
+                    return d9trace::Result::IndexRange;
+                id<MTLBuffer> b = transient((uint32_t)byte_count);
+                if (!b || !b.contents)
+                    return d9trace::Result::IndexRange;
+                memcpy((uint8_t *)b.contents + transient_used_ - ((uint32_t(byte_count) + 15) & ~15u),
+                       d.inline_indices, (size_t)byte_count);
                 [enc_ drawIndexedPrimitives:type
                                  indexCount:count
                                   indexType:itype
                                 indexBuffer:b
-                          indexBufferOffset:transient_used_ - ((count * isize + 15) & ~15u)];
+                          indexBufferOffset:transient_used_ - ((uint32_t(byte_count) + 15) & ~15u)];
             }
             return d9trace::Result::Encoded;
         }
         // A fan becomes a triangle list over the same vertices.
         std::vector<uint32_t> list;
-        list.reserve(count * 3);
+        if (count > (UINT32_MAX - 15) / 12)
+            return d9trace::Result::IndexRange;
+        // A triangle fan consumes count + 2 source vertices.
+        if (indexed && !d.inline_indices) {
+            auto b = buffers_.find(d.index_buffer);
+            if (b == buffers_.end() ||
+                (uint64_t(d.start) + count + 2) * isize > b->second.shadow.size())
+                return d9trace::Result::IndexRange;
+        }
+        list.reserve((size_t)count * 3);
         auto source = [&](uint32_t i) -> uint32_t {
             if (!indexed)
                 return d.start + i;
@@ -3597,7 +3627,7 @@ class Renderer final : public D9Backend {
                 p = d.inline_indices + (size_t)i * isize;
             } else {
                 auto b = buffers_.find(d.index_buffer);
-                size_t at = (size_t)(d.start + i) * isize;
+                size_t at = (size_t)(uint64_t(d.start) + i) * isize;
                 if (b == buffers_.end() || at + isize > b->second.shadow.size())
                     return 0;
                 p = b->second.shadow.data() + at;
@@ -3614,6 +3644,8 @@ class Renderer final : public D9Backend {
         }
         uint32_t bytes = (uint32_t)list.size() * 4;
         id<MTLBuffer> b = transient(bytes);
+        if (!b || !b.contents)
+            return d9trace::Result::IndexRange;
         NSUInteger off = transient_used_ - ((bytes + 15) & ~15u);
         memcpy((uint8_t *)b.contents + off, list.data(), bytes);
         [enc_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
