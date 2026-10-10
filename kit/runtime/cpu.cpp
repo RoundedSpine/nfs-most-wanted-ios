@@ -43,7 +43,9 @@ void guest_pc_sample(uint32_t target) {
     if (!home) return;
     char path[1024];
     snprintf(path, sizeof(path), "%s/Documents/diagnostics/guest-pc.log", home);
-    // Keep a rolling window of dispatches without unbounded storage growth.
+    // Serialize truncation and appends so guest threads cannot erase one another's samples.
+    static std::mutex sample_mutex;
+    std::lock_guard<std::mutex> guard(sample_mutex);
     if ((n & 262143u) == 0) {
         FILE *reset = fopen(path, "w");
         if (reset) fclose(reset);
