@@ -45,7 +45,7 @@ void guest_pc_sample(uint32_t target) {
     if (!out) return;
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    fprintf(out, "%lld dispatch_sample target=0x%08x count=%llu\\n",
+    fprintf(out, "%lld dispatch_sample target=0x%08x count=%llu\n",
             (long long)ms, target, (unsigned long long)n);
     fclose(out);
 }
