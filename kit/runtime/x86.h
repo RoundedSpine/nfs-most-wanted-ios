@@ -132,6 +132,7 @@ RECOMP_HOT_INLINE uint32_t rd32(uint32_t a) {
     return v;
 }
 RECOMP_HOT_INLINE uint64_t rd64(uint32_t a) {
+    RECOMP_NULL_GUARD(a, 0);
     uint64_t v;
     memcpy(&v, g_mem + a, 8);
     return v;
@@ -204,25 +205,30 @@ RECOMP_HOT_INLINE void wr32(uint32_t a, uint32_t v) {
     recomp_watch(a, 4, v);
 }
 RECOMP_HOT_INLINE void wr64(uint32_t a, uint64_t v) {
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 8);
     recomp_watch(a, 8, v);
 }
 RECOMP_HOT_INLINE float rdf32(uint32_t a) {
+    RECOMP_NULL_GUARD(a, 0);
     float v;
     memcpy(&v, g_mem + a, 4);
     return v;
 }
 RECOMP_HOT_INLINE double rdf64(uint32_t a) {
+    RECOMP_NULL_GUARD(a, 0);
     double v;
     memcpy(&v, g_mem + a, 8);
     return v;
 }
 RECOMP_HOT_INLINE void wrf32(uint32_t a, float v) {
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 4);
     if (RECOMP_UNLIKELY(g_dirty_count != 0))
         recomp_store_hooks(a, 4, 0, 0);
 }
 RECOMP_HOT_INLINE void wrf64(uint32_t a, double v) {
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 8);
     if (RECOMP_UNLIKELY(g_dirty_count != 0))
         recomp_store_hooks(a, 8, 0, 0);
