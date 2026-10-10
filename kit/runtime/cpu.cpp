@@ -21,6 +21,36 @@
 #include <string.h>
 #include <map>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+namespace {
+std::atomic<uint32_t> g_last_guest_target{0};
+std::atomic<uint64_t> g_guest_dispatch_count{0};
+std::atomic<bool> g_guest_pc_watch_started{false};
+void guest_pc_sample(uint32_t target) {
+    g_last_guest_target.store(target, std::memory_order_relaxed);
+    const uint64_t n = g_guest_dispatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    // Sample at a dispatch boundary; this is a function entry, not every guest instruction.
+    if ((n & 4095u) != 0) return;
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/Documents/diagnostics/guest-pc.log", home);
+    FILE *out = fopen(path, "a");
+    if (!out) return;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    fprintf(out, "%lld dispatch_sample target=0x%08x count=%llu\\n",
+            (long long)ms, target, (unsigned long long)n);
+    fclose(out);
+}
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // State for the _setjmp/_longjmp intrinsics, outside extern "C" because these
@@ -142,6 +172,9 @@ int recomp_module_is_call_return(uint32_t target) {
     return lo < m->call_return_count && m->call_returns[lo] == target;
 }
 int recomp_module_call(X86 *c, uint32_t target) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    guest_pc_sample(target);
+#endif
     const RecompModule *m = recomp_module_containing(target);
     if (!m)
         return 0;
