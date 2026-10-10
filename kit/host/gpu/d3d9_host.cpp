@@ -761,7 +761,7 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
     static std::atomic<bool> watchdog_started{false};
     frame_count.fetch_add(1, std::memory_order_relaxed);
     if (!watchdog_started.exchange(true)) {
-        std::thread([&frame_count] {
+        std::thread([] {
             uint64_t previous = 0;
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
