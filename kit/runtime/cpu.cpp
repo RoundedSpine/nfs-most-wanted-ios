@@ -22,6 +22,7 @@
 #include <map>
 #include <vector>
 #include <atomic>
+#include <mutex>
 #include <chrono>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
