@@ -2978,7 +2978,7 @@ class Renderer final : public D9Backend {
                 snprintf(path, sizeof(path), "%s/Documents/diagnostics/metal-commands.log", home);
                 FILE *out = fopen(path, "a");
                 if (out) {
-                    fprintf(out, "serial=%llu event=created\\n", (unsigned long long)serial_);
+                    fprintf(out, "serial=%llu event=created\n", (unsigned long long)serial_);
                     fclose(out);
                 }
             }
@@ -3001,7 +3001,7 @@ class Renderer final : public D9Backend {
                   snprintf(path, sizeof(path), "%s/Documents/diagnostics/metal-commands.log", home);
                   FILE *out = fopen(path, "a");
                   if (out) {
-                      fprintf(out, "serial=%llu status=%lu error=%s\n",
+                      fprintf(out, "serial=%llu event=completed status=%lu error=%s\n",
                               (unsigned long long)serial, (unsigned long)cb.status,
                               cb.error ? cb.error.localizedDescription.UTF8String : "none");
                       fclose(out);
@@ -3024,6 +3024,18 @@ class Renderer final : public D9Backend {
             vis_ = nil;
         }
         [cmd_ commit];
+        if ((serial_ & 127u) == 0) {
+            const char *home = getenv("HOME");
+            if (home) {
+                char path[1024];
+                snprintf(path, sizeof(path), "%s/Documents/diagnostics/metal-commands.log", home);
+                FILE *out = fopen(path, "a");
+                if (out) {
+                    fprintf(out, "serial=%llu event=submitted\n", (unsigned long long)serial_);
+                    fclose(out);
+                }
+            }
+        }
         if (trace_) {
             submitted_ = serial_;
             trace_->event("submit", trace_context());
