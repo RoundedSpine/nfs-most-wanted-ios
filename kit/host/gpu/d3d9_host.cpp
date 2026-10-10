@@ -54,7 +54,7 @@ void ios_cpu_trace(const char *kind, uint64_t frame, uint64_t delta = 0) {
     snprintf(path, sizeof(path), "%s/Documents/diagnostics/cpu-frames.log", home);
     FILE *out = fopen(path, "a");
     if (!out) return;
-    fprintf(out, "%lld %s frame=%llu delta=%llu\\n", (long long)ms,
+    fprintf(out, "%lld %s frame=%llu delta=%llu\n", (long long)ms,
             kind, (unsigned long long)frame, (unsigned long long)delta);
     fclose(out);
 }
@@ -184,7 +184,7 @@ void deliver_readback(uint32_t ticket, uint64_t request, const uint8_t *bytes, u
     const uint64_t row_bytes = uint64_t(w) * 4u;
     const uint64_t total_bytes = row_bytes * uint64_t(h);
     const bool valid = bytes && w && h && row_bytes <= UINT32_MAX &&
-                       total_bytes <= SIZE_MAX && total_bytes <= (256ull << 20);
+                       total_bytes <= SIZE_MAX;
     r.failed = !valid;
     r.w = w;
     r.h = h;
@@ -656,7 +656,7 @@ int host_d9_texture_read_poll(uint32_t ticket, uint8_t *bytes, uint32_t pitch, u
     const uint64_t total_bytes = row_bytes * uint64_t(h);
     if (r.failed || r.w != w || r.h != h || !bytes || !w || !h ||
         row_bytes > UINT32_MAX || pitch < row_bytes ||
-        total_bytes > SIZE_MAX || total_bytes > (256ull << 20) ||
+        total_bytes > SIZE_MAX ||
         r.bytes.size() != size_t(total_bytes))
         return -1;
     for (uint32_t y = 0; y < h; ++y)
