@@ -32,6 +32,50 @@
 #include <unordered_map>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+#include <chrono>
+#include <cstdlib>
+namespace {
+std::mutex g_trace_mutex;
+uint64_t g_trace_second = 0;
+unsigned g_trace_count = 0, g_trace_skipped = 0;
+void ios_gpu_trace(const char *kind, uint32_t id, uint32_t a = 0, uint32_t b = 0) {
+    const uint64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> guard(g_trace_mutex);
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/Documents/diagnostics/gpu-events.log", home);
+    const uint64_t second = ms / 1000;
+    if (g_trace_second != second) {
+        if (g_trace_skipped) {
+            FILE *out = fopen(path, "a");
+            if (out) {
+                fprintf(out, "%llu GPU previous_second=%llu skipped=%u\n",
+                    (unsigned long long)ms, (unsigned long long)g_trace_second, g_trace_skipped);
+                fclose(out);
+            }
+        }
+        g_trace_second = second;
+        g_trace_count = g_trace_skipped = 0;
+    }
+    if (g_trace_count++ >= 24) { ++g_trace_skipped; return; }
+    FILE *out = fopen(path, "a");
+    if (out) {
+        fprintf(out, "%llu GPU %s id=%u a=%u b=%u\n",
+            (unsigned long long)ms, kind, id, a, b);
+        fclose(out);
+    }
+}
+}
+#else
+static inline void ios_gpu_trace(const char *, uint32_t, uint32_t = 0, uint32_t = 0) {}
+#endif
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #include <emscripten/proxying.h>
@@ -520,10 +564,12 @@ void host_d9_texture_define(const HostD9TextureDesc *desc) {
         return;
     Command c{Op::Define};
     c.desc = *desc;
+    ios_gpu_trace("texture_define", desc->id, desc->width, desc->height);
     t->batch().commands.push_back(c);
     t->submitted();
 }
 void host_d9_texture_drop(uint32_t id) {
+    ios_gpu_trace("texture_drop", id);
     push(Op::Drop, id);
 }
 void host_d9_texture_upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
@@ -581,6 +627,7 @@ void host_d9_buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const u
     RenderThread *t = render_thread();
     if (!t || !bytes)
         return;
+    ios_gpu_trace("buffer_upload", id, total, size);
     Batch &b = t->batch();
     Command c{Op::BufferUpload};
     c.a = id;
@@ -592,6 +639,7 @@ void host_d9_buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const u
     t->submitted();
 }
 void host_d9_buffer_drop(uint32_t id) {
+    ios_gpu_trace("buffer_drop", id);
     push(Op::BufferDrop, id);
 }
 void host_d9_admission_entry(uint64_t serial) {
