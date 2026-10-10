@@ -759,7 +759,10 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
     // Called on the guest/game thread. A separate monitor records whether it stops advancing.
     static std::atomic<uint64_t> frame_count{0};
     static std::atomic<bool> watchdog_started{false};
-    frame_count.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t frame = frame_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    // Independent persistent frame-boundary breadcrumb. This is not an instruction-level
+    // guest PC trace; it records entry/exit around the synchronous GPU present boundary.
+    ios_gpu_trace("frame_present_enter", (uint32_t)frame, width, height);
     if (!watchdog_started.exchange(true)) {
         std::thread([] {
             uint64_t previous = 0;
@@ -797,6 +800,9 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
             }
             backend()->present(backbuffer, width, height);
         });
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    ios_gpu_trace("frame_present_exit", (uint32_t)frame);
+#endif
 }
 int host_d9_read_presented(uint8_t *rgb, uint32_t cap, uint32_t *w, uint32_t *h) {
     RenderThread *t = render_thread();
