@@ -113,7 +113,7 @@ void ios_start_crash_monitor() {
                          (unsigned long long)vm.resident_size);
                 ios_diagnostic(line);
             }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }).detach();
 }
@@ -167,7 +167,7 @@ void platform_ui_init_hints() {
     // put there with devicectl (see tools/ios_logs.py for the container).
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
     ios_start_crash_monitor();
-    ios_diagnostic("platform init");
+    ios_diagnostic("platform init; diagnostics v2 memory interval=1s");
 }
 
 // Documents/game when it is ready. Anything else - no game yet, a bundled copy
@@ -465,24 +465,29 @@ SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
 bool platform_ui_handle_lifecycle(const SDL_Event &e) {
     switch (e.type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        ios_diagnostic("lifecycle will enter background");
         fprintf(stderr, "[ios] will enter background: suspending presentation and audio\n");
         host_present_suspend(true);
         host_audio_pause(true);
         return true;
     case SDL_EVENT_DID_ENTER_BACKGROUND:
+        ios_diagnostic("lifecycle did enter background");
         fprintf(stderr, "[ios] did enter background\n");
         host_present_suspend(true);
         host_audio_pause(true);
         return true;
     case SDL_EVENT_WILL_ENTER_FOREGROUND:
+        ios_diagnostic("lifecycle will enter foreground");
         fprintf(stderr, "[ios] will enter foreground\n");
         return true;
     case SDL_EVENT_DID_ENTER_FOREGROUND:
+        ios_diagnostic("lifecycle did enter foreground");
         fprintf(stderr, "[ios] did enter foreground: resuming audio and presentation\n");
         host_audio_pause(false);
         host_present_suspend(false);
         return true;
     case SDL_EVENT_TERMINATING:
+        ios_diagnostic("lifecycle terminating");
         fprintf(stderr, "[ios] terminating\n");
         host_present_suspend(true);
         host_audio_pause(true);
@@ -509,6 +514,9 @@ int platform_ui_default_overlay() {
 }
 
 void platform_ui_process_exit(int code) {
+    char exit_event[80];
+    snprintf(exit_event, sizeof(exit_event), "platform process exit code=%d", code);
+    ios_diagnostic(exit_event);
     // UIApplicationMain never returns, so the game's own Exit would leave its
     // last frame on the screen; the game asked to end, and this ends it.
     fprintf(stderr, "[ios] the game exited (%d); ending the app\n", code);
