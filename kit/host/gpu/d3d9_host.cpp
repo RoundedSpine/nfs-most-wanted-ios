@@ -42,6 +42,22 @@ namespace {
 std::mutex g_trace_mutex;
 uint64_t g_trace_second = 0;
 unsigned g_trace_count = 0, g_trace_skipped = 0;
+// Dedicated CPU-side frame breadcrumbs: never subject to GPU event rate limiting.
+std::mutex g_cpu_trace_mutex;
+void ios_cpu_trace(const char *kind, uint64_t frame, uint64_t delta = 0) {
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lock(g_cpu_trace_mutex);
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/Documents/diagnostics/cpu-frames.log", home);
+    FILE *out = fopen(path, "a");
+    if (!out) return;
+    fprintf(out, "%lld %s frame=%llu delta=%llu\\n", (long long)ms,
+            kind, (unsigned long long)frame, (unsigned long long)delta);
+    fclose(out);
+}
 void ios_gpu_trace(const char *kind, uint32_t id, uint32_t a = 0, uint32_t b = 0) {
     const uint64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -762,15 +778,14 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
     const uint64_t frame = frame_count.fetch_add(1, std::memory_order_relaxed) + 1;
     // Independent persistent frame-boundary breadcrumb. This is not an instruction-level
     // guest PC trace; it records entry/exit around the synchronous GPU present boundary.
-    ios_gpu_trace("frame_present_enter", (uint32_t)frame, width, height);
+    ios_cpu_trace("present_enter", frame);
     if (!watchdog_started.exchange(true)) {
         std::thread([] {
             uint64_t previous = 0;
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 const uint64_t current = frame_count.load(std::memory_order_relaxed);
-                ios_gpu_trace("game_thread_heartbeat", (uint32_t)current,
-                              (uint32_t)(current - previous), 0);
+                ios_cpu_trace("watchdog", current, current - previous);
                 previous = current;
             }
         }).detach();
@@ -801,7 +816,7 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
             backend()->present(backbuffer, width, height);
         });
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-    ios_gpu_trace("frame_present_exit", (uint32_t)frame);
+    ios_cpu_trace("present_exit", frame);
 #endif
 }
 int host_d9_read_presented(uint8_t *rgb, uint32_t cap, uint32_t *w, uint32_t *h) {
