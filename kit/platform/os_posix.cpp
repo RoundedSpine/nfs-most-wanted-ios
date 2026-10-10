@@ -1007,7 +1007,7 @@ static void ios_file_trace(const char *op, int fd, const char *path, int64_t amo
             struct timeval tv;
             gettimeofday(&tv, nullptr);
             const unsigned long long id = g_ios_file_op.fetch_add(1, std::memory_order_relaxed) + 1;
-            fprintf(out, "%lld op_id=%llu %s fd=%d result=%lld offset=%lld errno=%d path=%s\\n",
+            fprintf(out, "%lld op_id=%llu %s fd=%d result=%lld offset=%lld errno=%d path=%s\n",
                     (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000,
                     id, op, fd, (long long)amount, (long long)offset, error,
                     path ? path : "-");
