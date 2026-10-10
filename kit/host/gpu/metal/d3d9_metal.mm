@@ -56,6 +56,29 @@
 #include <unordered_map>
 #include <vector>
 
+#if TARGET_OS_IPHONE
+static void ios_metal_diag(const char *phase, uint64_t serial, id<MTLCommandBuffer> cb = nil) {
+    @autoreleasepool {
+        NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        if (!dirs.count) return;
+        NSString *folder = [dirs[0] stringByAppendingPathComponent:@"diagnostics"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *file = [folder stringByAppendingPathComponent:@"metal-commands.log"];
+        FILE *out = fopen(file.fileSystemRepresentation, "a");
+        if (!out) return;
+        const uint64_t ms = (uint64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);
+        fprintf(out, "%llu %s serial=%llu status=%ld error=%s\\n",
+                (unsigned long long)ms, phase, (unsigned long long)serial,
+                cb ? (long)cb.status : -1L,
+                cb.error ? cb.error.localizedDescription.UTF8String : "none");
+        fflush(out);
+        fclose(out);
+    }
+}
+#else
+static void ios_metal_diag(const char *, uint64_t, id<MTLCommandBuffer> = nil) {}
+#endif
+
 namespace {
 
 using namespace d9gpu;
@@ -2948,7 +2971,9 @@ class Renderer final : public D9Backend {
         uint64_t serial = serial_;
         std::atomic<uint64_t> *done = &completed_;
         std::atomic<uint64_t> *gpu_us = &gpu_us_;
+        ios_metal_diag("created", serial, cmd_);
         [cmd_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+          ios_metal_diag("completed", serial, cb);
           if (cb.GPUEndTime > cb.GPUStartTime) {
               const uint64_t us = (uint64_t)((cb.GPUEndTime - cb.GPUStartTime) * 1e6);
               gpu_us->fetch_add(us);
@@ -2969,7 +2994,9 @@ class Renderer final : public D9Backend {
             vis_pool_.emplace_back(vis_, serial_);
             vis_ = nil;
         }
+        ios_metal_diag("submitting", serial_, cmd_);
         [cmd_ commit];
+        ios_metal_diag("submitted", serial_, cmd_);
         if (trace_) {
             submitted_ = serial_;
             trace_->event("submit", trace_context());
