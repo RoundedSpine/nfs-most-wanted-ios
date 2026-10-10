@@ -450,7 +450,7 @@ class RenderThread {
                 if (vc_bytes > SIZE_MAX || pc_bytes > SIZE_MAX ||
                     payload_bytes > SIZE_MAX || !fits(cmd.at, size_t(payload_bytes)) ||
                     !fits(cmd.state_at, state_bytes)) {
-                    fprintf(stderr, "d3d9: rejected malformed serialized draw (payload=%llu state=%zu size=%zu)\\n",
+                    fprintf(stderr, "d3d9: rejected malformed serialized draw (payload=%llu state=%zu size=%zu)\n",
                             (unsigned long long)payload_bytes, cmd.state_at, b.bytes.size());
                     break;
                 }
