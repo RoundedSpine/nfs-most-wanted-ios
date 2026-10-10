@@ -122,7 +122,16 @@ jobs:
           python3.12 --version
 
           chmod +x ./setup.sh
-          ./setup.sh "$GAME_DIR"
+          if ! ./setup.sh "$GAME_DIR"; then
+            echo "::group::Setup failure details (last 250 lines)"
+            if [ -f build/setup.log ]; then
+              tail -n 250 build/setup.log
+            else
+              echo "build/setup.log was not created"
+            fi
+            echo "::endgroup::"
+            exit 1
+          fi
 
           test -f build/recomp/gen/table.c || {
             echo "ERROR: Translation output missing."
@@ -209,6 +218,17 @@ jobs:
           find build/ios -type f -name '*.bcsymbolmap' -exec cp {} artifacts/build-diagnostics/ \; || true
           echo "Diagnostics files:"
           find artifacts/build-diagnostics -maxdepth 2 -type f -print
+
+      - name: Collect setup failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p artifacts/build-diagnostics
+          if [ -f build/setup.log ]; then
+            cp build/setup.log artifacts/build-diagnostics/setup.log
+          fi
+          if [ -f build/recomp/gen/table.c ]; then
+            ls -lh build/recomp/gen/table.c > artifacts/build-diagnostics/translation-output.txt
+          fi
 
       - name: Upload build diagnostics
         if: always()
