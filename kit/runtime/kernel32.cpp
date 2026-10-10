@@ -827,7 +827,29 @@ void k_ReadFile(X86 *c) {
         set_eax(c, 0);
         return;
     }
+    // Correlate guest streaming reads with guest-PC and GPU logs on iOS.
+    // Log only every 64th read (and all failed reads) to bound overhead.
+    static std::atomic<uint64_t> stream_read_seq{0};
+    const uint64_t read_seq = stream_read_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     int64_t n = os_fd_read(o->fd, g_mem + buf, want);
+#if defined(__APPLE__)
+    if ((read_seq & 63u) == 0 || n < 0) {
+        const char *home = getenv("HOME");
+        if (home) {
+            char path[1024];
+            snprintf(path, sizeof(path), "%s/Documents/diagnostics/streaming-reads.log", home);
+            FILE *out = fopen(path, "a");
+            if (out) {
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                fprintf(out, "%lld read_seq=%llu path=%s want=%u got=%lld\n",
+                        (long long)ms, (unsigned long long)read_seq,
+                        o->guest_name.c_str(), want, (long long)n);
+                fclose(out);
+            }
+        }
+    }
+#endif
     if (recomp_env("TRACE_FILES"))
         LOGW("file: read handle=%08x want=%u got=%lld", arg(c, 0), want, (long long)n);
     if (n < 0) {
