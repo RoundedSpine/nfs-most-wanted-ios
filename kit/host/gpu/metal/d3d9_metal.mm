@@ -2978,6 +2978,21 @@ class Renderer final : public D9Backend {
               gpu_us->fetch_add(us);
               g_host_game_gpu_us.fetch_add(us, std::memory_order_relaxed); // Test83: the overlay's GPU
           }
+          // Persist command failures even if stderr is not captured on device.
+          if (cb.status != MTLCommandBufferStatusCompleted) {
+              const char *home = getenv("HOME");
+              if (home) {
+                  char path[1024];
+                  snprintf(path, sizeof(path), "%s/Documents/diagnostics/metal-commands.log", home);
+                  FILE *out = fopen(path, "a");
+                  if (out) {
+                      fprintf(out, "serial=%llu status=%lu error=%s\n",
+                              (unsigned long long)serial, (unsigned long)cb.status,
+                              cb.error ? cb.error.localizedDescription.UTF8String : "none");
+                      fclose(out);
+                  }
+              }
+          }
           if (cb.error)
               fprintf(stderr, "d3d9 metal: command buffer failed: %s\n",
                       cb.error.localizedDescription.UTF8String);
