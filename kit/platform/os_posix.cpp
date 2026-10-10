@@ -989,8 +989,9 @@ static int native_flags(int flags) {
     return f;
 }
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-static void ios_file_trace(const char *op, int fd, const char *path, int64_t amount) {
-    // Thread-local guard prevents diagnostic file I/O from tracing itself.
+static std::atomic<unsigned long long> g_ios_file_op{0};
+static void ios_file_trace(const char *op, int fd, const char *path, int64_t amount,
+                           int64_t offset = -1, int error = 0) {
     static thread_local bool inside = false;
     if (inside) return;
     inside = true;
@@ -1000,27 +1001,35 @@ static void ios_file_trace(const char *op, int fd, const char *path, int64_t amo
         snprintf(file, sizeof(file), "%s/Documents/diagnostics/file-events.log", home);
         FILE *out = fopen(file, "a");
         if (out) {
+            char resolved[4096] = {};
+            if (!path && fd >= 0 && fcntl(fd, F_GETPATH, resolved) == 0)
+                path = resolved;
             struct timeval tv;
             gettimeofday(&tv, nullptr);
-            fprintf(out, "%lld %s fd=%d bytes=%lld path=%s\n",
+            const unsigned long long id = g_ios_file_op.fetch_add(1, std::memory_order_relaxed) + 1;
+            fprintf(out, "%lld op_id=%llu %s fd=%d result=%lld offset=%lld errno=%d path=%s\\n",
                     (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000,
-                    op, fd, (long long)amount, path ? path : "-");
+                    id, op, fd, (long long)amount, (long long)offset, error,
+                    path ? path : "-");
+            fflush(out);
             fclose(out);
         }
     }
     inside = false;
 }
 #else
-static void ios_file_trace(const char *, int, const char *, int64_t) {}
+static void ios_file_trace(const char *, int, const char *, int64_t, int64_t = -1, int = 0) {}
 #endif
 int os_fd_open(const char *path, int flags) {
     int fd = open(path, native_flags(flags), 0644);
-    ios_file_trace("open", fd, path, flags);
+    ios_file_trace("open", fd, path, fd >= 0 ? flags : -1, -1, fd < 0 ? errno : 0);
     return fd;
 }
 int64_t os_fd_read(int fd, void *buf, size_t n) {
+    int64_t before = (int64_t)lseek(fd, 0, SEEK_CUR);
     int64_t got = (int64_t)read(fd, buf, n);
-    ios_file_trace("read", fd, nullptr, got);
+    int saved_error = got < 0 ? errno : 0;
+    ios_file_trace("read", fd, nullptr, got, before, saved_error);
     return got;
 }
 int64_t os_fd_write(int fd, const void *buf, size_t n) {
@@ -1028,10 +1037,11 @@ int64_t os_fd_write(int fd, const void *buf, size_t n) {
 }
 int64_t os_fd_seek(int fd, int64_t off, int whence) {
     int64_t result = (int64_t)lseek(fd, (off_t)off, whence);
-    ios_file_trace("seek", fd, nullptr, result);
+    ios_file_trace("seek", fd, nullptr, result, off, result < 0 ? errno : 0);
     return result;
 }
 int os_fd_close(int fd) {
+    ios_file_trace("close", fd, nullptr, 0);
     return close(fd);
 }
 int os_fd_dup(int fd) {
