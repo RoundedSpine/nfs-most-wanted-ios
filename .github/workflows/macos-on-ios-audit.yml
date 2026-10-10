@@ -1,0 +1,31 @@
+name: macOS to iOS Source Compatibility Audit
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch research sources
+        run: |
+          git clone --depth 1 https://github.com/elforeign/nfs-most-wanted-mac.git upstream
+          git clone --depth 1 https://github.com/zorrobyte/macos-on-ios-public.git converter
+      - name: Inspect build dependencies and conversion prerequisites
+        run: |
+          mkdir -p audit
+          git -C upstream rev-parse HEAD > audit/upstream-commit.txt
+          git -C converter rev-parse HEAD > audit/converter-commit.txt
+          grep -R -n -E 'SDL_WINDOW_METAL|SDL_Metal_CreateView|SDL_WINDOW_VULKAN|SDL_Vulkan_CreateSurface|RECOMP_D9_VULKAN|d3d9_metal' upstream/kit/host upstream/kit/CMakeLists.txt > audit/graphics-paths.txt || true
+          grep -R -n -E 'SDL_CreateWindow|SDL_PollEvent|SDL_AppInit|NSWindow|CAMetalLayer|MTLCreateSystemDefaultDevice' upstream/kit/host > audit/windowing-paths.txt || true
+          grep -n -E 'vtool|lipo|install_name_tool|codesign|--profile|--identity|--team' converter/tools/convert_app.py > audit/conversion-prerequisites.txt || true
+          grep -n -E 'target app|--target|--no-install|MACOS_ONLY' upstream/kit/tools/build.py > audit/build-entrypoints.txt || true
+          xcodebuild -version > audit/toolchain.txt
+          xcrun --sdk iphoneos --show-sdk-path >> audit/toolchain.txt
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFSMW-macos-to-ios-source-audit
+          path: audit/
+          if-no-files-found: error
