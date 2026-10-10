@@ -2968,6 +2968,21 @@ class Renderer final : public D9Backend {
         }
         cmd_ = [queue_ commandBuffer];
         ++serial_;
+        // Sample successful command buffers, but always persist failures.
+        // The diagnostics directory is created by the iOS crash monitor.
+        const bool log_sample = (serial_ & 127u) == 0;
+        if (log_sample) {
+            const char *home = getenv("HOME");
+            if (home) {
+                char path[1024];
+                snprintf(path, sizeof(path), "%s/Documents/diagnostics/metal-commands.log", home);
+                FILE *out = fopen(path, "a");
+                if (out) {
+                    fprintf(out, "serial=%llu event=created\\n", (unsigned long long)serial_);
+                    fclose(out);
+                }
+            }
+        }
         dispatch_semaphore_t sem = frames_;
         uint64_t serial = serial_;
         std::atomic<uint64_t> *done = &completed_;
@@ -2979,7 +2994,7 @@ class Renderer final : public D9Backend {
               g_host_game_gpu_us.fetch_add(us, std::memory_order_relaxed); // Test83: the overlay's GPU
           }
           // Persist command failures even if stderr is not captured on device.
-          if (cb.status != MTLCommandBufferStatusCompleted) {
+          if (cb.status != MTLCommandBufferStatusCompleted || (serial & 127u) == 0) {
               const char *home = getenv("HOME");
               if (home) {
                   char path[1024];
