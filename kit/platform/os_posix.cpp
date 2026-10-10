@@ -990,8 +990,17 @@ static int native_flags(int flags) {
 }
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 static std::atomic<unsigned long long> g_ios_file_op{0};
+// Detailed per-operation tracing is opt-in to avoid perturbing world streaming.
+static bool ios_file_trace_enabled() {
+    static const bool enabled = [] {
+        const char *value = getenv("NFSMW_IOS_FILE_TRACE");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
 static void ios_file_trace(const char *op, int fd, const char *path, int64_t amount,
                            int64_t offset = -1, int error = 0) {
+    if (!ios_file_trace_enabled()) return;
     static thread_local bool inside = false;
     if (inside) return;
     inside = true;
@@ -1026,7 +1035,7 @@ int os_fd_open(const char *path, int flags) {
     return fd;
 }
 int64_t os_fd_read(int fd, void *buf, size_t n) {
-    int64_t before = (int64_t)lseek(fd, 0, SEEK_CUR);
+    int64_t before = ios_file_trace_enabled() ? (int64_t)lseek(fd, 0, SEEK_CUR) : -1;
     int64_t got = (int64_t)read(fd, buf, n);
     int saved_error = got < 0 ? errno : 0;
     ios_file_trace("read", fd, nullptr, got, before, saved_error);
