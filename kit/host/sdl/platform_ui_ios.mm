@@ -33,6 +33,7 @@ namespace fs = std::filesystem;
 #include <fcntl.h>
 #include <unistd.h>
 #include <mach/mach.h>
+#include <os/proc.h>
 #include <pthread.h>
 #include <thread>
 #include <execinfo.h>
@@ -43,6 +44,7 @@ std::mutex g_diag_mutex;
 void ios_diagnostic(const char *event);
 
 std::atomic<bool> g_crash_monitor_started{false};
+std::atomic<unsigned long long> g_peak_footprint{0};
 int g_crash_fd = -1;
 
 // The signal handler only uses async-signal-safe operations. The native .ips
@@ -92,6 +94,11 @@ void ios_start_crash_monitor() {
         NSString *crash = [folder stringByAppendingPathComponent:@"fatal-signal.log"];
         g_crash_fd = open(crash.fileSystemRepresentation, O_CREAT | O_WRONLY | O_APPEND, 0600);
     }
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidReceiveMemoryWarningNotification
+                    object:nil queue:nil usingBlock:^(NSNotification *) {
+            ios_diagnostic("memory_warning UIApplicationDidReceiveMemoryWarningNotification");
+        }];
     NSSetUncaughtExceptionHandler(&ios_uncaught_exception);
     for (int signo : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}) {
         struct sigaction action = {};
@@ -107,10 +114,18 @@ void ios_start_crash_monitor() {
             kern_return_t kr = task_info(mach_task_self(), TASK_VM_INFO,
                                          reinterpret_cast<task_info_t>(&vm), &count);
             if (kr == KERN_SUCCESS) {
-                char line[160];
-                snprintf(line, sizeof(line), "memory physical_footprint=%llu resident=%llu",
-                         (unsigned long long)vm.phys_footprint,
-                         (unsigned long long)vm.resident_size);
+                const unsigned long long footprint = (unsigned long long)vm.phys_footprint;
+                unsigned long long previous = g_peak_footprint.load(std::memory_order_relaxed);
+                while (footprint > previous &&
+                       !g_peak_footprint.compare_exchange_weak(previous, footprint,
+                                                               std::memory_order_relaxed)) {}
+                const size_t available = os_proc_available_memory();
+                char line[256];
+                snprintf(line, sizeof(line),
+                         "memory physical_footprint=%llu resident=%llu peak_footprint=%llu available=%llu",
+                         footprint, (unsigned long long)vm.resident_size,
+                         g_peak_footprint.load(std::memory_order_relaxed),
+                         (unsigned long long)available);
                 ios_diagnostic(line);
             }
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -167,7 +182,7 @@ void platform_ui_init_hints() {
     // put there with devicectl (see tools/ios_logs.py for the container).
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
     ios_start_crash_monitor();
-    ios_diagnostic("platform init; diagnostics v2 memory interval=1s");
+    ios_diagnostic("platform init; diagnostics v3 footprint peak available memory_warning interval=1s");
 }
 
 // Documents/game when it is ready. Anything else - no game yet, a bundled copy
