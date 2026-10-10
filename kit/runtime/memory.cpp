@@ -525,7 +525,7 @@ uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
             it->second.size = need;
             auto next = std::next(it);
             if (next != g_blocks->end() && !next->second.used && next->first == addr + have) {
-                uint32_t merged = tail + next->second.size;
+                uint32_t merged = tail + next->second.size; // both spans are contiguous inside the bounded heap arena
                 drop_block(next);
                 put_block(addr + need, merged, 0, false);
             } else {
@@ -541,8 +541,8 @@ uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
     // Try to grow into a free neighbour.
     auto next = std::next(it);
     if (next != g_blocks->end() && !next->second.used && next->first == addr + have &&
-        have + next->second.size >= need) {
-        uint32_t total = have + next->second.size;
+        uint64_t(have) + next->second.size >= need) {
+        uint32_t total = uint32_t(uint64_t(have) + next->second.size);
         drop_block(next);
         uint32_t tail = total - need;
         it->second.size = need;
