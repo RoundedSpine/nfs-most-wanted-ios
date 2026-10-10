@@ -822,7 +822,7 @@ void k_ReadFile(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    if (!gm_valid(buf, want)) {
+    if (!gm_valid(buf, want) || (pread && !gm_valid(pread, sizeof(uint32_t)))) {
         set_last_error(ERROR_ACCESS_DENIED_);
         set_eax(c, 0);
         return;
@@ -909,9 +909,15 @@ void k_SetFilePointer(X86 *c) {
         set_eax(c, INVALID_HANDLE_VALUE_);
         return;
     }
-    int64_t off = dist;
-    if (phigh)
-        off |= ((int64_t)(int32_t)rd32(phigh)) << 32;
+    if ((phigh && !gm_valid(phigh, sizeof(uint32_t))) || method > 2) {
+        set_last_error(ERROR_INVALID_PARAMETER_);
+        set_eax(c, INVALID_HANDLE_VALUE_);
+        return;
+    }
+    // Combine the signed high DWORD without left-shifting a negative value.
+    const uint64_t bits = phigh ? (uint64_t(rd32(phigh)) << 32) | uint32_t(dist)
+                                : uint64_t(int64_t(dist));
+    const int64_t off = static_cast<int64_t>(bits);
     int whence = method == 1 ? OS_SEEK_CUR : method == 2 ? OS_SEEK_END : OS_SEEK_SET;
     int64_t pos = os_fd_seek(o->fd, off, whence);
     if (pos < 0) {
