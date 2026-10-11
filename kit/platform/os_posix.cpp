@@ -1094,6 +1094,16 @@ int os_exe_path(char *buf, size_t cap) {
 // iOS fatal breadcrumbs: open once during handler installation, never from a signal.
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 static int g_ios_fatal_fd = -1;
+static int g_ios_session_fd = -1;
+static void ios_session_clean_exit() {
+    if (g_ios_session_fd < 0) return;
+    const char clean = 'C';
+    (void)pwrite(g_ios_session_fd, &clean, 1, 0);
+    (void)fsync(g_ios_session_fd);
+    (void)close(g_ios_session_fd);
+    g_ios_session_fd = -1;
+}
+
 static void ios_fatal_literal(const char *message, size_t length) {
     if (g_ios_fatal_fd >= 0) {
         ssize_t ignored = write(g_ios_fatal_fd, message, length);
@@ -1125,6 +1135,31 @@ static void ios_fatal_init() {
     if (n + sizeof("/fatal-events.log") >= sizeof(path)) return;
     memcpy(path + n, "/fatal-events.log", sizeof("/fatal-events.log"));
     g_ios_fatal_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    // Persist one byte per session: R=running/unknown, C=clean atexit.
+    // R on next launch is NOT evidence of jetsam; force-quit and power loss also qualify.
+    memcpy(path + n, "/session-state", sizeof("/session-state"));
+    g_ios_session_fd = open(path, O_RDWR | O_CREAT, 0600);
+    if (g_ios_session_fd >= 0) {
+        char previous = 0;
+        const ssize_t read_count = pread(g_ios_session_fd, &previous, 1, 0);
+        const char running = 'R';
+        if (pwrite(g_ios_session_fd, &running, 1, 0) == 1) {
+            (void)fsync(g_ios_session_fd);
+            if (atexit(ios_session_clean_exit) != 0) {
+                (void)close(g_ios_session_fd);
+                g_ios_session_fd = -1;
+            }
+        } else {
+            (void)close(g_ios_session_fd);
+            g_ios_session_fd = -1;
+        }
+        if (read_count == 1 && previous == 'R') {
+            static const char warning[] =
+                "previous session not marked clean; cause unknown (could be force quit, kill, crash, or shutdown)\n";
+            ios_fatal_literal(warning, sizeof(warning) - 1);
+        }
+    }
+
     if (g_ios_fatal_fd >= 0) {
         static const char marker[] = "session started; absence of fatal signal does not exclude jetsam/SIGKILL\n";
         ios_fatal_literal(marker, sizeof(marker) - 1);
