@@ -1077,7 +1077,6 @@ static void gpu_sync(ComObj *o) {
     for (uint32_t slot = 0; slot < m.cpu_dirty.size(); ++slot) {
         if (!m.cpu_dirty[slot])
             continue;
-        m.cpu_dirty[slot] = 0;
         ComObj *s = slot_surface(o, slot);
         if (!s || s->blob.empty())
             continue;
@@ -1103,6 +1102,8 @@ static void gpu_sync(ComObj *o) {
         } else {
             host_d9_texture_upload(o->id, r.face, r.level, source, s->pitch);
         }
+        // Preserve dirty state on rejected uploads so a later sync can retry.
+        m.cpu_dirty[slot] = 0;
     }
 }
 
