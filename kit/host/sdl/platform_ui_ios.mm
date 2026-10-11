@@ -556,39 +556,68 @@ void platform_ui_process_exit(int code) {
 // controller. Both must run on the main thread.
 // ---------------------------------------------------------------------------
 namespace {
-UIImpactFeedbackGenerator *g_tap_generator;        // prepared once, reused for every tap
-CHHapticEngine *g_haptic_engine;                   // created once, started lazily
-id<CHHapticAdvancedPatternPlayer> g_rumble_player; // the current 30 s rumble, or nil
+UIImpactFeedbackGenerator *g_tap_generator;
+CHHapticEngine *g_haptic_engine;
+id<CHHapticAdvancedPatternPlayer> g_rumble_player;
+bool g_rumble_active = false;
+
+// The host pump refreshes device rumble every 30 seconds. Looping prevents
+// the underlying 30-second continuous event from silently expiring.
+constexpr NSTimeInterval kRumbleDuration = 30.0;
 
 bool device_supports_haptics() {
     static const bool supported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
     return supported;
 }
 
-// The engine, created on first use. A stop or reset (background, audio
-// session interruption) drops the player, since it dies with the engine.
+// A previous crash delivered a HIDEvent where a pattern player was expected.
+// Validate the actual Objective-C object before *any* player message.
+bool valid_rumble_player(id player, SEL selector) {
+    return player && [player conformsToProtocol:@protocol(CHHapticAdvancedPatternPlayer)] &&
+           [player respondsToSelector:selector];
+}
+
+void forget_rumble_player() {
+    g_rumble_player = nil;
+    g_rumble_active = false;
+}
+
+void stop_rumble_player() {
+    id player = g_rumble_player;
+    forget_rumble_player();
+    if (!valid_rumble_player(player, @selector(stopAtTime:error:))) {
+        if (player)
+            fprintf(stderr, "[ios] invalid rumble player at stop; discarding\n");
+        return;
+    }
+    NSError *error = nil;
+    BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
+    if (!ok || error)
+        fprintf(stderr, "[ios] rumble stop failed: %s\n",
+                error ? error.localizedDescription.UTF8String : "unknown error");
+}
+
 CHHapticEngine *haptic_engine() {
     if (!g_haptic_engine) {
         NSError *error = nil;
-        g_haptic_engine = [[CHHapticEngine alloc] initAndReturnError:&error];
-        if (error) {
+        CHHapticEngine *engine = [[CHHapticEngine alloc] initAndReturnError:&error];
+        if (!engine || error) {
             fprintf(stderr, "[ios] CHHapticEngine init failed: %s\n",
-                    error.localizedDescription.UTF8String);
+                    error ? error.localizedDescription.UTF8String : "unknown error");
             return nil;
         }
-        // Core Haptics calls both handlers on its own background queue; every
-        // other read/write of g_rumble_player runs on the main queue (the
-        // functions below), so hop there before touching it.
-        g_haptic_engine.stoppedHandler = ^(CHHapticEngineStoppedReason) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            g_rumble_player = nil;
-          });
+        engine.playsHapticsOnly = YES;
+        // Callbacks are delivered on a Core Haptics thread. Do not clear a
+        // player asynchronously: that can erase a replacement player created
+        // after an interruption. The next request checks its command result
+        // and recreates an invalid player as necessary.
+        engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+            fprintf(stderr, "[ios] haptic engine stopped: %ld\n", (long)reason);
         };
-        g_haptic_engine.resetHandler = ^{
-          dispatch_async(dispatch_get_main_queue(), ^{
-            g_rumble_player = nil;
-          });
+        engine.resetHandler = ^{
+            fprintf(stderr, "[ios] haptic engine reset\n");
         };
+        g_haptic_engine = engine;
     }
     return g_haptic_engine;
 }
@@ -611,58 +640,73 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       if (!device_supports_haptics())
           return;
       if (intensity <= 0.0f) {
-          // CHHapticAdvancedPatternPlayer supports stopAtTime:error:, not cancelAndReturnError:.
-          // A nil player is safe to ignore; stop any active pattern before releasing it.
-          if (g_rumble_player) {
-              NSError *stop_error = nil;
-              [g_rumble_player stopAtTime:CHHapticTimeImmediate error:&stop_error];
-              if (stop_error)
-                  fprintf(stderr, "[ios] rumble stop failed: %s\n",
-                          stop_error.localizedDescription.UTF8String);
-          }
-          g_rumble_player = nil;
+          stop_rumble_player();
           return;
       }
+
       NSError *error = nil;
       if (g_rumble_player) {
-          // Already rumbling: retune it in place rather than restart it.
-          CHHapticDynamicParameter *param = [[CHHapticDynamicParameter alloc]
-              initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
-                            value:intensity
-                     relativeTime:0];
-          [g_rumble_player sendParameters:@[ param ] atTime:CHHapticTimeImmediate error:&error];
-          if (!error)
-              return;
-          g_rumble_player = nil; // the player died under us; fall through and rebuild it
+          if (g_rumble_active &&
+              valid_rumble_player(g_rumble_player, @selector(sendParameters:atTime:error:))) {
+              CHHapticDynamicParameter *param = [[CHHapticDynamicParameter alloc]
+                  initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
+                                value:intensity
+                         relativeTime:0];
+              BOOL ok = [g_rumble_player sendParameters:@[ param ]
+                                                atTime:CHHapticTimeImmediate error:&error];
+              if (ok && !error)
+                  return;
+          }
+          // If the engine reset, the player expired, or its runtime class is
+          // unexpected, never message it again. Recreate it below.
+          forget_rumble_player();
       }
+
       CHHapticEngine *engine = haptic_engine();
       if (!engine)
           return;
-      [engine startAndReturnError:&error];
-      if (error)
+      error = nil;
+      BOOL started = [engine startAndReturnError:&error];
+      if (!started || error) {
+          fprintf(stderr, "[ios] haptic engine start failed: %s\n",
+                  error ? error.localizedDescription.UTF8String : "unknown error");
           return;
+      }
+
       CHHapticEventParameter *intensity_param = [[CHHapticEventParameter alloc]
-          initWithParameterID:CHHapticEventParameterIDHapticIntensity
-                        value:intensity];
+          initWithParameterID:CHHapticEventParameterIDHapticIntensity value:intensity];
       CHHapticEventParameter *sharpness_param = [[CHHapticEventParameter alloc]
-          initWithParameterID:CHHapticEventParameterIDHapticSharpness
-                        value:0.3f];
+          initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.3f];
       CHHapticEvent *event =
           [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
                                         parameters:@[ intensity_param, sharpness_param ]
-                                      relativeTime:0
-                                          duration:30.0];
+                                      relativeTime:0 duration:kRumbleDuration];
+      error = nil;
       CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ event ]
                                                               parameters:@[]
                                                                    error:&error];
-      if (error)
+      if (!pattern || error)
           return;
-      id<CHHapticAdvancedPatternPlayer> player = [engine createAdvancedPlayerWithPattern:pattern
-                                                                                   error:&error];
-      if (error || !player)
+      error = nil;
+      id<CHHapticAdvancedPatternPlayer> player =
+          [engine createAdvancedPlayerWithPattern:pattern error:&error];
+      if (!player || error ||
+          !valid_rumble_player(player, @selector(startAtTime:error:)) ||
+          !valid_rumble_player(player, @selector(stopAtTime:error:)) ||
+          !valid_rumble_player(player, @selector(sendParameters:atTime:error:))) {
+          fprintf(stderr, "[ios] haptic player creation/type validation failed\n");
           return;
-      [player startAtTime:CHHapticTimeImmediate error:&error];
-      if (!error)
+      }
+      player.loopEnabled = YES;
+      player.loopEnd = kRumbleDuration;
+      error = nil;
+      BOOL ok = [player startAtTime:CHHapticTimeImmediate error:&error];
+      if (ok && !error) {
           g_rumble_player = player;
+          g_rumble_active = true;
+      } else {
+          fprintf(stderr, "[ios] haptic player start failed: %s\n",
+                  error ? error.localizedDescription.UTF8String : "unknown error");
+      }
     });
 }
