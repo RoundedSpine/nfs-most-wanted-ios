@@ -611,7 +611,15 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       if (!device_supports_haptics())
           return;
       if (intensity <= 0.0f) {
-          [g_rumble_player cancelAndReturnError:nil];
+          // CHHapticAdvancedPatternPlayer supports stopAtTime:error:, not cancelAndReturnError:.
+          // A nil player is safe to ignore; stop any active pattern before releasing it.
+          if (g_rumble_player) {
+              NSError *stop_error = nil;
+              [g_rumble_player stopAtTime:CHHapticTimeImmediate error:&stop_error];
+              if (stop_error)
+                  fprintf(stderr, "[ios] rumble stop failed: %s\n",
+                          stop_error.localizedDescription.UTF8String);
+          }
           g_rumble_player = nil;
           return;
       }
