@@ -1082,13 +1082,26 @@ static void gpu_sync(ComObj *o) {
         if (!s || s->blob.empty())
             continue;
         HostD9Surface r = surface_ref(s);
+        // A valid row pitch alone does not prove the complete source span is
+        // present. Check the owned allocation before passing it to Metal.
+        const uint32_t block = dxt_block_bytes(s->rmask);
+        const uint64_t rows = block ? (uint64_t(s->height) + 3u) / 4u : s->height;
+        const uint64_t slice_bytes = uint64_t(s->pitch) * rows;
+        const uint64_t depth = o->kind == K_D3D9VOLUMETEXTURE
+            ? volumes().at(s->id).depth : 1u;
+        if (!slice_bytes || slice_bytes > s->blob.size() ||
+            depth > uint64_t(s->blob.size()) / slice_bytes) {
+            LOGW("d3d9: rejected undersized texture source id=%u slot=%u pitch=%u rows=%llu depth=%llu blob=%zu",
+                 o->id, slot, s->pitch, (unsigned long long)rows,
+                 (unsigned long long)depth, s->blob.size());
+            continue;
+        }
+        const uint8_t *source = resource_bytes(s);
         if (o->kind == K_D3D9VOLUMETEXTURE) {
-            const uint32_t depth = volumes().at(s->id).depth;
             for (uint32_t z = 0; z < depth; ++z)
-                host_d9_texture_upload(o->id, z, slot, resource_bytes(s) + z * s->pitch * s->height,
-                                       s->pitch);
+                host_d9_texture_upload(o->id, z, slot, source + size_t(z * slice_bytes), s->pitch);
         } else {
-            host_d9_texture_upload(o->id, r.face, r.level, resource_bytes(s), s->pitch);
+            host_d9_texture_upload(o->id, r.face, r.level, source, s->pitch);
         }
     }
 }
