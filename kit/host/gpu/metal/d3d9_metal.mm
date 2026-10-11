@@ -1359,14 +1359,17 @@ class Renderer final : public D9Backend {
                 note_alloc(AS_BUFFER_SPARE, b.buffer, b.shadow.size(), id, 1, 0);
             }
             b.spares.push_back(retired);
-            // Only evict buffers whose last GPU use has completed. Under a
-            // burst of streaming updates, unfinished spares must remain owned.
+            // Keep the spare cache bounded without retiring GPU-owned storage.
+            // Only the overflow path waits; normal streaming remains asynchronous.
             while (b.spares.size() > 4) {
                 auto finished = std::find_if(b.spares.begin(), b.spares.end(),
-                    [done](const SpareBuf &s) { return s.retired <= done; });
-                if (finished == b.spares.end())
-                    break;
-                b.spares.erase(finished);
+                    [this](const SpareBuf &s) { return s.retired <= completed_.load(); });
+                if (finished != b.spares.end()) {
+                    b.spares.erase(finished);
+                } else {
+                    settle(b.spares.front().retired);
+                    b.spares.erase(b.spares.begin());
+                }
             }
             b.used = 0;
             trace_buffer_upload(id, b, total, offset, size, true);
