@@ -1091,6 +1091,46 @@ int os_exe_path(char *buf, size_t cap) {
 #endif
 }
 
+// iOS fatal breadcrumbs: open once during handler installation, never from a signal.
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+static int g_ios_fatal_fd = -1;
+static void ios_fatal_literal(const char *message, size_t length) {
+    if (g_ios_fatal_fd >= 0) {
+        ssize_t ignored = write(g_ios_fatal_fd, message, length);
+        (void)ignored;
+    }
+}
+static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
+    (void)context;
+    // Fixed-format, async-signal-safe breadcrumb; avoid stdio, malloc, and locks.
+    char record[] = "fatal signal=00 address=0x0000000000000000\n";
+    unsigned value = (unsigned)sig;
+    record[13] = char('0' + (value / 10) % 10);
+    record[14] = char('0' + value % 10);
+    uintptr_t address = (uintptr_t)(info ? info->si_addr : nullptr);
+    const char digits[] = "0123456789abcdef";
+    for (unsigned i = 0; i < 16; ++i)
+        record[26 + i] = digits[(address >> (60 - i * 4)) & 15];
+    ios_fatal_literal(record, sizeof(record) - 1);
+    // Do not resume the faulting instruction or call non-signal-safe callbacks.
+    _exit(128 + sig);
+}
+static void ios_fatal_init() {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/Documents/diagnostics", home);
+    mkdir(path, 0700);
+    const size_t n = strlen(path);
+    if (n + sizeof("/fatal-events.log") >= sizeof(path)) return;
+    memcpy(path + n, "/fatal-events.log", sizeof("/fatal-events.log"));
+    g_ios_fatal_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (g_ios_fatal_fd >= 0) {
+        static const char marker[] = "session started; absence of fatal signal does not exclude jetsam/SIGKILL\n";
+        ios_fatal_literal(marker, sizeof(marker) - 1);
+    }
+}
+#endif
 static OsFaultFn g_fault_fn = nullptr;
 static void fault_trampoline(int sig) {
     const char *what = sig == SIGSEGV   ? "SIGSEGV"
@@ -1101,9 +1141,21 @@ static void fault_trampoline(int sig) {
 }
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    ios_fatal_init();
+    struct sigaction action{};
+    action.sa_sigaction = ios_fatal_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigaction(SIGSEGV, &action, nullptr);
+    sigaction(SIGBUS, &action, nullptr);
+    sigaction(SIGILL, &action, nullptr);
+    sigaction(SIGABRT, &action, nullptr);
+#else
     signal(SIGSEGV, fault_trampoline);
     signal(SIGBUS, fault_trampoline);
     signal(SIGABRT, fault_trampoline);
+#endif
     return 1;
 }
 
