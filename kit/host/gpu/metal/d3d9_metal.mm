@@ -1344,8 +1344,15 @@ class Renderer final : public D9Backend {
                 note_alloc(AS_BUFFER_SPARE, b.buffer, b.shadow.size(), id, 1, 0);
             }
             b.spares.push_back(retired);
-            if (b.spares.size() > 4)
-                b.spares.erase(b.spares.begin());
+            // Only evict buffers whose last GPU use has completed. Under a
+            // burst of streaming updates, unfinished spares must remain owned.
+            while (b.spares.size() > 4) {
+                auto finished = std::find_if(b.spares.begin(), b.spares.end(),
+                    [done](const SpareBuf &s) { return s.retired <= done; });
+                if (finished == b.spares.end())
+                    break;
+                b.spares.erase(finished);
+            }
             b.used = 0;
             trace_buffer_upload(id, b, total, offset, size, true);
             return;
