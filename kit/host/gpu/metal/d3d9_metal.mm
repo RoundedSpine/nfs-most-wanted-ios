@@ -3750,7 +3750,10 @@ class Renderer final : public D9Backend {
     std::atomic<uint64_t> completed_{0};
     std::atomic<uint64_t> gpu_us_{0}; // GPU time of finished command buffers since the last report
     double gpu_wait_s_ = 0;           // time the game thread spent waiting for the GPU
-    uint64_t report_cpu_ns_ = 0, report_instructions_ = 0;
+    uint64_t report_cpu_ns_ = 0;
+#if TARGET_OS_OSX
+    uint64_t report_instructions_ = 0;
+#endif
     bool in_flight_ = false;
     id<MTLRenderCommandEncoder> enc_ = nil;
     std::unordered_map<uint32_t, Query> queries_;
