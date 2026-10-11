@@ -23,6 +23,7 @@
 #ifdef __APPLE__
 #include <AudioToolbox/AudioToolbox.h>
 #include <TargetConditionals.h>
+#include <sys/ucontext.h>
 #include <algorithm>
 #include <atomic>
 #ifdef __APPLE__
