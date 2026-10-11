@@ -1111,7 +1111,6 @@ static void ios_fatal_literal(const char *message, size_t length) {
     }
 }
 static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
-    (void)context;
     // Fixed-format, async-signal-safe breadcrumb; avoid stdio, malloc, and locks.
     char record[] = "fatal signal=00 address=0x0000000000000000\n";
     unsigned value = (unsigned)sig;
@@ -1122,6 +1121,26 @@ static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
     for (unsigned i = 0; i < 16; ++i)
         record[26 + i] = digits[(address >> (60 - i * 4)) & 15];
     ios_fatal_literal(record, sizeof(record) - 1);
+#if defined(__aarch64__) || defined(__arm64__)
+    // The kernel supplies the interrupted thread's registers in the signal
+    // context. Reading them avoids unsafe stack unwinding in a fatal handler.
+    if (context) {
+        const ucontext_t *uc = static_cast<const ucontext_t *>(context);
+        if (uc->uc_mcontext) {
+            const auto &state = uc->uc_mcontext->__ss;
+            char regs[] = "native pc=0x0000000000000000 lr=0x0000000000000000 sp=0x0000000000000000 fp=0x0000000000000000\n";
+            const uint64_t values[4] = {
+                uint64_t(state.__pc), uint64_t(state.__lr),
+                uint64_t(state.__sp), uint64_t(state.__fp)
+            };
+            const unsigned offsets[4] = {12, 34, 56, 78};
+            for (unsigned k = 0; k < 4; ++k)
+                for (unsigned i = 0; i < 16; ++i)
+                    regs[offsets[k] + i] = digits[(values[k] >> (60 - i * 4)) & 15];
+            ios_fatal_literal(regs, sizeof(regs) - 1);
+        }
+    }
+#endif
     // Do not resume the faulting instruction or call non-signal-safe callbacks.
     _exit(128 + sig);
 }
