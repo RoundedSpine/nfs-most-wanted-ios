@@ -34,6 +34,7 @@
 #include <cmath>
 #include <new>
 #include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <mach/mach_time.h>
 #endif
 #ifndef MAP_ANON
@@ -1096,6 +1097,11 @@ int os_exe_path(char *buf, size_t cap) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 static int g_ios_fatal_fd = -1;
 static int g_ios_session_fd = -1;
+// Snapshot dyld metadata before any signal. Never call dyld from the handler.
+static uintptr_t g_ios_image_load = 0;
+static intptr_t g_ios_image_slide = 0;
+static uint8_t g_ios_image_uuid[16]{};
+static bool g_ios_image_uuid_valid = false;
 static void ios_session_clean_exit() {
     if (g_ios_session_fd < 0) return;
     const char clean = 'C';
@@ -1122,6 +1128,19 @@ static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
     for (unsigned i = 0; i < 16; ++i)
         record[26 + i] = digits[(address >> (60 - i * 4)) & 15];
     ios_fatal_literal(record, sizeof(record) - 1);
+    // Captured at startup; fixed-format signal-safe output.
+    char image_record[] = "main image load=0x0000000000000000 slide=0x0000000000000000 uuid=00000000000000000000000000000000\n";
+    const uint64_t image_values[2] = {uint64_t(g_ios_image_load), uint64_t(g_ios_image_slide)};
+    const unsigned image_offsets[2] = {18, 43};
+    for (unsigned k = 0; k < 2; ++k)
+        for (unsigned i = 0; i < 16; ++i)
+            image_record[image_offsets[k] + i] = digits[(image_values[k] >> (60 - 4 * i)) & 15];
+    if (g_ios_image_uuid_valid)
+        for (unsigned i = 0; i < 16; ++i) {
+            image_record[66 + i * 2] = digits[g_ios_image_uuid[i] >> 4];
+            image_record[67 + i * 2] = digits[g_ios_image_uuid[i] & 15];
+        }
+    ios_fatal_literal(image_record, sizeof(image_record) - 1);
 #if defined(__aarch64__) || defined(__arm64__)
     // The kernel supplies the interrupted thread's registers in the signal
     // context. Reading them avoids unsafe stack unwinding in a fatal handler.
@@ -1146,6 +1165,28 @@ static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
     _exit(128 + sig);
 }
 static void ios_fatal_init() {
+    // Image zero is the main executable. Its ASLR slide and Mach-O UUID
+    // identify the matching dSYM and allow offline atos symbolication.
+    const mach_header *header = _dyld_get_image_header(0);
+    if (header && header->magic == MH_MAGIC_64) {
+        g_ios_image_load = reinterpret_cast<uintptr_t>(header);
+        g_ios_image_slide = _dyld_get_image_vmaddr_slide(0);
+        const auto *h = reinterpret_cast<const mach_header_64 *>(header);
+        const uint8_t *cursor = reinterpret_cast<const uint8_t *>(h + 1);
+        const uint8_t *end = cursor + h->sizeofcmds;
+        for (uint32_t i = 0; i < h->ncmds; ++i) {
+            if (cursor + sizeof(load_command) > end) break;
+            const auto *cmd = reinterpret_cast<const load_command *>(cursor);
+            if (cmd->cmdsize < sizeof(load_command) || cmd->cmdsize > size_t(end - cursor)) break;
+            if (cmd->cmd == LC_UUID && cmd->cmdsize >= sizeof(uuid_command)) {
+                const auto *uuid = reinterpret_cast<const uuid_command *>(cursor);
+                memcpy(g_ios_image_uuid, uuid->uuid, sizeof(g_ios_image_uuid));
+                g_ios_image_uuid_valid = true;
+                break;
+            }
+            cursor += cmd->cmdsize;
+        }
+    }
     const char *home = getenv("HOME");
     if (!home) return;
     char path[1024];
