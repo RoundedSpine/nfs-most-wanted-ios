@@ -170,7 +170,8 @@ static void impact_feedback(const PopModApi *api, pop_cpu_v1 *cpu,
     (void)inv; (void)user;
     uint32_t wrapper = cpu->ecx, device = get_u32(cpu->esp + 4);
     api->call_original(api, cpu->target, cpu);
-    int gain = setting("impact_rumble", 100);
+    const int64_t requested_gain = setting("impact_rumble", 100);
+    const int gain = (int)(requested_gain < 0 ? 0 : requested_gain > 200 ? 200 : requested_gain);
     if (!gain || !impact_api_available(api) || device != 0 ||
         wrapper != get_u32(0x009203c4u) || get_u32(0x00925e90u) != 6 ||
         !get_u32(wrapper + 0x4458) || get_u32(wrapper + 0x4460) || get_u32(wrapper + 0x2220)) return;
