@@ -614,11 +614,11 @@ void host_d9_texture_drop(uint32_t id) {
     ios_gpu_trace("texture_drop", id);
     push(Op::Drop, id);
 }
-void host_d9_texture_upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+bool host_d9_texture_upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
                             uint32_t pitch) {
-    // The size is the backend's to know, so this one runs in step.
-    if (RenderThread *t = render_thread())
-        t->sync([&] { backend()->upload(id, face, level, bytes, pitch); });
+    // Uploads run synchronously so caller-owned source bytes remain valid.
+    RenderThread *t = render_thread();
+    return t && t->sync([&] { return backend()->upload(id, face, level, bytes, pitch); });
 }
 int host_d9_texture_read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes,
                          uint32_t pitch) {
