@@ -149,33 +149,6 @@ jobs:
 
           test -s artifacts/NFSMostWanted-iOS-unsigned.ipa
 
-      - name: Generate and verify symbolication files
-        run: |
-          set -euo pipefail
-          APP="$(find build/ios -type d -name 'SpeedRecomp.app' -print -quit)"
-          test -n "$APP"
-          EXEC="$APP/SpeedRecomp"
-          test -s "$EXEC"
-          mkdir -p artifacts/symbolication
-          cp "$EXEC" artifacts/symbolication/SpeedRecomp
-          xcrun dsymutil "$EXEC" -o artifacts/symbolication/SpeedRecomp.app.dSYM
-          xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp \
-            | awk '{print $2, $3}' | sort > artifacts/symbolication/executable-uuid-pairs.txt
-          xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp.app.dSYM \
-            | awk '{print $2, $3}' | sort > artifacts/symbolication/dsym-uuid-pairs.txt
-          test -s artifacts/symbolication/executable-uuid-pairs.txt
-          test -s artifacts/symbolication/dsym-uuid-pairs.txt
-          diff -u artifacts/symbolication/executable-uuid-pairs.txt artifacts/symbolication/dsym-uuid-pairs.txt
-          test -s artifacts/symbolication/SpeedRecomp.app.dSYM/Contents/Resources/DWARF/SpeedRecomp
-
-      - name: Upload symbolication files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: NFSMostWanted-iOS-symbolication
-          path: artifacts/symbolication/
-          if-no-files-found: warn
-
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
