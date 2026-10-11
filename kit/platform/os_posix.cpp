@@ -1164,6 +1164,14 @@ void os_write_stderr_raw(const char *s, size_t n) {
     (void)ignored;
 }
 void os_exit_immediately(int code) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // Called outside a signal handler by the runtime's immediate-exit path.
+    if (g_ios_fatal_fd >= 0) {
+        char record[80];
+        int n = snprintf(record, sizeof(record), "runtime immediate exit code=%d\n", code);
+        if (n > 0) ios_fatal_literal(record, (size_t)n < sizeof(record) ? (size_t)n : sizeof(record) - 1);
+    }
+#endif
     _exit(code);
 }
 
