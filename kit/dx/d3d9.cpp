@@ -1096,14 +1096,21 @@ static void gpu_sync(ComObj *o) {
             continue;
         }
         const uint8_t *source = resource_bytes(s);
+        bool accepted = true;
         if (o->kind == K_D3D9VOLUMETEXTURE) {
-            for (uint32_t z = 0; z < depth; ++z)
-                host_d9_texture_upload(o->id, z, slot, source + size_t(z * slice_bytes), s->pitch);
+            for (uint32_t z = 0; z < depth; ++z) {
+                if (!host_d9_texture_upload(o->id, z, slot,
+                                            source + size_t(z * slice_bytes), s->pitch)) {
+                    accepted = false;
+                    break;
+                }
+            }
         } else {
-            host_d9_texture_upload(o->id, r.face, r.level, source, s->pitch);
+            accepted = host_d9_texture_upload(o->id, r.face, r.level, source, s->pitch);
         }
-        // Preserve dirty state on rejected uploads so a later sync can retry.
-        m.cpu_dirty[slot] = 0;
+        // Rejected uploads stay dirty so subsequent draws can retry them.
+        if (accepted)
+            m.cpu_dirty[slot] = 0;
     }
 }
 
