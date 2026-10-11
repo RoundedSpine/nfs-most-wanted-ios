@@ -412,14 +412,16 @@ class WebGpuRenderer final : public D9Backend {
         textures_.erase(it);
     }
 
-    void upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+    bool upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
                 uint32_t pitch) override {
         Tex *tp = tex_ptr(id);
         if (!tp || !tp->texture || !bytes)
-            return;
+            return false;
         Tex &t = *tp;
-        if (level >= t.levels || t.depth)
-            return;
+        if (t.depth)
+            return true;
+        if (level >= t.levels)
+            return false;
         if (t.used == serial_ && encoder_)
             submit(); // draws already recorded read the old contents
         uint32_t w = std::max<uint32_t>(t.desc.width >> level, 1);
@@ -442,7 +444,7 @@ class WebGpuRenderer final : public D9Backend {
             size.width = (size.width + 3) & ~3u;
             size.height = (size.height + 3) & ~3u;
             wgpuQueueWriteTexture(queue_, &dst, scratch_.data(), scratch_.size(), &layout, &size);
-            return;
+            return true;
         }
         const uint8_t *src = bytes;
         uint32_t row = pitch;
@@ -488,6 +490,7 @@ class WebGpuRenderer final : public D9Backend {
         layout.bytesPerRow = pw * out_bpp;
         WGPUExtent3D size = {pw, ph, 1};
         wgpuQueueWriteTexture(queue_, &dst, packed.data(), packed.size(), &layout, &size);
+        return true;
     }
 
     bool read(uint32_t, uint32_t, uint32_t, uint8_t *, uint32_t) override {
