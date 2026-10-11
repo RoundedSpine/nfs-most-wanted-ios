@@ -737,8 +737,13 @@ static FxPass *pass_of(FxEffect &fx, uint32_t h) {
 }
 
 static uint32_t guest_copy(const void *data, size_t size) {
-    uint32_t a = heap_alloc((uint32_t)size + 1, true, 4);
-    if (a)
+    // Check the full host size before narrowing to the 32-bit guest heap size.
+    // heap_alloc validates the resulting request against its arena limit.
+    if ((!data && size) || size >= UINT32_MAX)
+        return 0;
+    const uint32_t bytes = static_cast<uint32_t>(size) + 1u;
+    uint32_t a = heap_alloc(bytes, true, 4);
+    if (a && size)
         memcpy(gm_ptr(a), data, size);
     return a;
 }
