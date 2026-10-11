@@ -822,23 +822,30 @@ static uint32_t dxt_block_bytes(uint32_t fmt) {
 }
 
 static ComObj *make_surface(ComObj *dev, uint32_t w, uint32_t h, uint32_t fmt) {
+    // Validate layout before creating an object. The backing store and pitch
+    // use uint32_t, so neither may be truncated from a larger calculation.
+    const uint32_t width = w ? w : 1;
+    const uint32_t height = h ? h : 1;
+    const uint32_t block = dxt_block_bytes(fmt);
+    const uint32_t bytes_per_pixel = block ? 0 : format_bytes(fmt);
+    const uint64_t rows = block ? (uint64_t(height) + 3) / 4 : height;
+    const uint64_t pitch = block ? ((uint64_t(width) + 3) / 4) * block
+                                 : uint64_t(width) * bytes_per_pixel;
+    const uint64_t bytes = pitch * rows;
+    if (!pitch || pitch > UINT32_MAX || !bytes || bytes > UINT32_MAX)
+        return nullptr;
     ComObj *s = com_new(K_D3D9SURFACE);
     if (!s)
         return nullptr;
     s->dev_d3d = dev ? dev->id : 0;
-    s->width = w ? w : 1;
-    s->height = h ? h : 1;
+    s->width = width;
+    s->height = height;
     s->rmask = fmt; // the D3DFORMAT, which a Direct3D 9 surface has no other field for
-    if (uint32_t block = dxt_block_bytes(fmt)) {
-        // A compressed surface is rows of blocks; Pitch is the bytes in one.
-        uint32_t bw = (s->width + 3) / 4, bh = (s->height + 3) / 4;
-        s->bpp = 0;
-        s->pitch = bw * block;
-        resource_alloc(s, s->pitch * bh);
-    } else {
-        s->bpp = format_bytes(fmt) * 8;
-        s->pitch = s->width * format_bytes(fmt);
-        resource_alloc(s, s->pitch * s->height);
+    s->bpp = bytes_per_pixel * 8;
+    s->pitch = static_cast<uint32_t>(pitch);
+    if (!resource_alloc(s, static_cast<uint32_t>(bytes))) {
+        com_release(s);
+        return nullptr;
     }
     return s;
 }
