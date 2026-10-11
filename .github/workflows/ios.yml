@@ -170,15 +170,37 @@ jobs:
       - name: Package unsigned IPA
         run: |
           set -euo pipefail
+          APP="$(find build/ios -type d -name 'SpeedRecomp.app' -print -quit)"
+          test -n "$APP" || { echo "::error::iOS app missing"; exit 1; }
+          mkdir -p artifacts/Payload
+          ditto "$APP" artifacts/Payload/SpeedRecomp.app
+          cp artifacts/RequestedEntitlements.plist artifacts/Payload/SpeedRecomp.app/RequestedEntitlements.plist
+          (cd artifacts && /usr/bin/zip -qry NFSMostWanted-iOS-unsigned.ipa Payload)
+          rm -rf artifacts/Payload
+          test -s artifacts/NFSMostWanted-iOS-unsigned.ipa
 
+      - name: Verify IPA and generate matching symbolication
+        run: |
+          set -euo pipefail
+          IPA="artifacts/NFSMostWanted-iOS-unsigned.ipa"
+          test -s "$IPA"
+          unzip -tq "$IPA"
+          mkdir -p artifacts/build-diagnostics artifacts/symbolication
+          /usr/bin/unzip -p "$IPA" Payload/SpeedRecomp.app/Info.plist > artifacts/build-diagnostics/Info.plist
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' artifacts/build-diagnostics/Info.plist)"
+          test "$BUNDLE_ID" = "dev.recompkit.nfsmw" || { echo "::error::Unexpected bundle identifier: $BUNDLE_ID"; exit 1; }
+          {
+            echo "source_commit=$GITHUB_SHA"
+            echo "source_ref=$GITHUB_REF"
+            echo "workflow_run=$GITHUB_RUN_ID"
+            echo "bundle_id=$BUNDLE_ID"
+            echo "ipa_sha256=$(shasum -a 256 "$IPA" | awk '{print $1}')"
+            echo "ios_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
+          } > artifacts/build-diagnostics/build-manifest.txt
           APP="$(find build/ios -type d -name 'SpeedRecomp.app' -print -quit)"
           test -n "$APP"
           EXEC="$APP/SpeedRecomp"
           test -f "$EXEC"
-          mkdir -p artifacts/symbolication
-          IPA="artifacts/NFSMostWanted-iOS-unsigned.ipa"
-          test -s "$IPA"
-          # Use the executable from the actual IPA, not merely a build-tree copy.
           /usr/bin/unzip -p "$IPA" Payload/SpeedRecomp.app/SpeedRecomp > artifacts/symbolication/SpeedRecomp
           chmod +x artifacts/symbolication/SpeedRecomp
           xcrun dsymutil "$EXEC" -o artifacts/symbolication/SpeedRecomp.app.dSYM
@@ -186,28 +208,15 @@ jobs:
           test -s "$DWARF"
           xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp > artifacts/symbolication/executable-uuid.txt
           xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp.app.dSYM > artifacts/symbolication/dsym-uuid.txt
-          cat artifacts/symbolication/executable-uuid.txt
-          cat artifacts/symbolication/dsym-uuid.txt
-          # Match every architecture/UUID pair, not only the first one.
           sed -E 's/^UUID: ([^ ]+) \\(([^)]+)\\).*/\\1 \\2/' artifacts/symbolication/executable-uuid.txt | sort > artifacts/symbolication/executable-uuid-pairs.txt
           sed -E 's/^UUID: ([^ ]+) \\(([^)]+)\\).*/\\1 \\2/' artifacts/symbolication/dsym-uuid.txt | sort > artifacts/symbolication/dsym-uuid-pairs.txt
           test -s artifacts/symbolication/executable-uuid-pairs.txt
-          diff -u artifacts/symbolication/executable-uuid-pairs.txt artifacts/symbolication/dsym-uuid-pairs.txt || {
-            echo "::error::Packaged executable and dSYM UUIDs do not match"
-            exit 1
-          }
-          # A dSYM bundle with no DWARF compile units cannot resolve source lines.
+          diff -u artifacts/symbolication/executable-uuid-pairs.txt artifacts/symbolication/dsym-uuid-pairs.txt
           xcrun dwarfdump --debug-info "$DWARF" > artifacts/symbolication/dwarf-info-check.txt
-          grep -q 'DW_TAG_compile_unit' artifacts/symbolication/dwarf-info-check.txt || {
-            echo "::error::dSYM contains no DWARF compilation units"
-            exit 1
-          }
+          grep -q 'DW_TAG_compile_unit' artifacts/symbolication/dwarf-info-check.txt || { echo "::error::No DWARF compile units"; exit 1; }
           rm artifacts/symbolication/dwarf-info-check.txt
           cp artifacts/build-diagnostics/build-manifest.txt artifacts/symbolication/build-manifest.txt
-          # Keep a small copy of the executable for offline atos/symbolication.
-          echo "Verified matching dSYM and packaged executable UUIDs"
-          echo "Diagnostics files:"
-          find artifacts/build-diagnostics -maxdepth 2 -type f -print
+          echo "Matching dSYM and packaged executable verified"
 
       - name: Collect setup failure diagnostics
         if: failure()
