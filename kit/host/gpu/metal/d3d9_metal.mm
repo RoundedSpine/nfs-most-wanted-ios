@@ -1070,20 +1070,20 @@ class Renderer final : public D9Backend {
         textures_.erase(it);
     }
 
-    void upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+    bool upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
                 uint32_t pitch) override {
         auto it = textures_.find(id);
         if (it == textures_.end() || !it->second.texture || !bytes)
-            return;
+            return false;
         Tex &t = it->second;
         if (level >= t.texture.mipmapLevelCount)
-            return;
+            return false;
         const bool volume = t.desc.kind == HOST_D9_TEX_VOLUME;
         const uint32_t slices = volume ? std::max(t.desc.depth >> level, 1u) : t.cube ? 6u : 1u;
         if (face >= slices)
-            return;
+            return false;
         if (t.info.pixel == MTLPixelFormatDepth32Float_Stencil8)
-            return;     // the game's view of a depth buffer is not uploaded
+            return true;      // depth contents are GPU-owned; no CPU upload needed
         settle(t.used); // draws already encoded read the old contents
         if (trace_) {
             ++t.revision;
@@ -1102,13 +1102,13 @@ class Renderer final : public D9Backend {
             ? ((uint64_t(w) + 3) / 4) * t.info.bytes
             : uint64_t(w) * t.info.bytes;
         if (!t.info.bytes || min_pitch > UINT32_MAX || pitch < min_pitch)
-            return;
+            return false;
         if (volume) {
             // The API supplies one independently pitched Z slice. Conversion
             // and lifetime follow the same settled-resource rules as 2D uploads.
             const uint32_t source_pitch = w * t.info.bytes;
             if (pitch < source_pitch)
-                return;
+                return false;
             const uint8_t *src = bytes;
             uint32_t row = pitch;
             if (t.info.conv != Conv::Direct) {
@@ -1122,7 +1122,7 @@ class Renderer final : public D9Backend {
                            withBytes:src
                          bytesPerRow:row
                        bytesPerImage:(NSUInteger)row * h];
-            return;
+            return true;
         }
         MTLRegion region = MTLRegionMake2D(0, 0, w, h);
         if (t.scale != 1.0f) {
@@ -1153,7 +1153,7 @@ class Renderer final : public D9Backend {
                            withBytes:packed.data()
                          bytesPerRow:pw * bpp
                        bytesPerImage:0];
-            return;
+            return true;
         }
         if (t.info.block) {
             [t.texture replaceRegion:region
@@ -1178,6 +1178,7 @@ class Renderer final : public D9Backend {
                          bytesPerRow:w * 4
                        bytesPerImage:0];
         }
+        return true;
     }
 
     bool read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes, uint32_t pitch) override {
