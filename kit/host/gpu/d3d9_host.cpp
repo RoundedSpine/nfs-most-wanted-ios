@@ -529,8 +529,10 @@ class RenderThread {
     bool threaded_ = false;
     bool pumped_ = false;
     std::atomic<bool> pump_asked_{false}; // a main-thread pump is on its way
+#ifdef __EMSCRIPTEN__
     int main_depth_ = 0;                  // main thread only
     bool pump_missed_ = false;            // main thread only
+#endif
     std::thread worker_;
     std::mutex m_;
     std::condition_variable work_cv_, idle_cv_;
