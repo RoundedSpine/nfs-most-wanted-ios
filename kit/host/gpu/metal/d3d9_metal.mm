@@ -31,6 +31,7 @@
 #include "../d3d9_capture.h"
 #include <future>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
