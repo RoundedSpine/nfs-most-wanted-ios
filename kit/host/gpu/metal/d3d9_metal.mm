@@ -1036,9 +1036,23 @@ class Renderer final : public D9Backend {
                 e->values[9] = (uint32_t)t.texture.height;
                 e->values[10] = d.depth;
             }
-        if (!t.texture)
+        if (!t.texture) {
             fprintf(stderr, "d3d9 metal: texture %u (%ux%u fmt %08x) was not created\n", d.id,
                     d.width, d.height, d.format);
+#if defined(__APPLE__)
+            // Persist failures independently of stderr; these can occur during
+            // scenery streaming under memory pressure.
+            if (const char *home = getenv("HOME")) {
+                char path[1024];
+                snprintf(path, sizeof(path), "%s/Documents/diagnostics/metal-texture-failures.log", home);
+                if (FILE *out = fopen(path, "a")) {
+                    fprintf(out, "id=%u width=%u height=%u depth=%u levels=%u format=%08x usage=%u kind=%u\n",
+                            d.id, d.width, d.height, d.depth, d.levels, d.format, d.usage, d.kind);
+                    fclose(out);
+                }
+            }
+#endif
+        }
     }
 
     void drop(uint32_t id) override {
