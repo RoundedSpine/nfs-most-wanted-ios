@@ -21,7 +21,7 @@ class D9Backend {
 
     virtual void define(const HostD9TextureDesc &d) = 0;
     virtual void drop(uint32_t id) = 0;
-    virtual void upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+    virtual bool upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
                         uint32_t pitch) = 0;
     virtual bool read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes,
                       uint32_t pitch) = 0;
