@@ -1261,8 +1261,11 @@ void Dev_CreateTexture(X86 *c) {
     resource_usage()[tex->id] = usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL);
     for (uint32_t l = 0; l < levels && l < 16; ++l) {
         ComObj *s = make_surface(dev, std::max(w >> l, 1u), std::max(h >> l, 1u), fmt);
-        if (!s)
-            break;
+        if (!s) {
+            com_release(tex); // texture_destroy releases all previously created mip surfaces
+            com_ret(c, E_OUTOFMEMORY);
+            return;
+        }
         s->front_obj = tex->id;
         tex->surfaces.push_back(s->id);
     }
