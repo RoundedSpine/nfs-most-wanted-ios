@@ -208,8 +208,8 @@ jobs:
           test -s "$DWARF"
           xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp > artifacts/symbolication/executable-uuid.txt
           xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp.app.dSYM > artifacts/symbolication/dsym-uuid.txt
-          sed -E 's/^UUID: ([^ ]+) \\(([^)]+)\\).*/\\1 \\2/' artifacts/symbolication/executable-uuid.txt | sort > artifacts/symbolication/executable-uuid-pairs.txt
-          sed -E 's/^UUID: ([^ ]+) \\(([^)]+)\\).*/\\1 \\2/' artifacts/symbolication/dsym-uuid.txt | sort > artifacts/symbolication/dsym-uuid-pairs.txt
+          awk '{print $2, $3}' artifacts/symbolication/executable-uuid.txt | sort > artifacts/symbolication/executable-uuid-pairs.txt
+          awk '{print $2, $3}' artifacts/symbolication/dsym-uuid.txt | sort > artifacts/symbolication/dsym-uuid-pairs.txt
           test -s artifacts/symbolication/executable-uuid-pairs.txt
           diff -u artifacts/symbolication/executable-uuid-pairs.txt artifacts/symbolication/dsym-uuid-pairs.txt
           xcrun dwarfdump --debug-info "$DWARF" > artifacts/symbolication/dwarf-info-check.txt
