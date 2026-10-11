@@ -214,8 +214,26 @@ jobs:
             echo "ipa_sha256=$(shasum -a 256 "$IPA" | awk '{print $1}')"
             echo "ios_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
           } > artifacts/build-diagnostics/build-manifest.txt
-          find build/ios -type d -name '*.dSYM' -exec ditto {} artifacts/build-diagnostics/ \; || true
-          find build/ios -type f -name '*.bcsymbolmap' -exec cp {} artifacts/build-diagnostics/ \; || true
+          # Produce a matching dSYM from the exact executable packaged in this IPA.
+          # Do not silently publish an empty symbols artifact.
+          APP="$(find build/ios -type d -name 'SpeedRecomp.app' -print -quit)"
+          test -n "$APP"
+          EXEC="$APP/SpeedRecomp"
+          test -f "$EXEC"
+          mkdir -p artifacts/symbolication
+          xcrun dsymutil "$EXEC" -o artifacts/symbolication/SpeedRecomp.app.dSYM
+          test -s artifacts/symbolication/SpeedRecomp.app.dSYM/Contents/Resources/DWARF/SpeedRecomp
+          xcrun dwarfdump --uuid "$EXEC" | tee artifacts/symbolication/executable-uuid.txt
+          xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp.app.dSYM | tee artifacts/symbolication/dsym-uuid.txt
+          EXEC_UUID="$(xcrun dwarfdump --uuid "$EXEC" | awk '/UUID:/ {print $2; exit}')"
+          DSYM_UUID="$(xcrun dwarfdump --uuid artifacts/symbolication/SpeedRecomp.app.dSYM | awk '/UUID:/ {print $2; exit}')"
+          test -n "$EXEC_UUID" && test "$EXEC_UUID" = "$DSYM_UUID" || {
+            echo "::error::Executable and dSYM UUIDs do not match"
+            exit 1
+          }
+          cp artifacts/build-diagnostics/build-manifest.txt artifacts/symbolication/build-manifest.txt
+          xcrun dwarfdump --debug-info artifacts/symbolication/SpeedRecomp.app.dSYM | head -n 25 > artifacts/symbolication/debug-info-sample.txt || true
+          echo "Matching dSYM UUID: $DSYM_UUID"
           echo "Diagnostics files:"
           find artifacts/build-diagnostics -maxdepth 2 -type f -print
 
@@ -237,6 +255,13 @@ jobs:
           name: NFSMostWanted-iOS-build-diagnostics
           path: artifacts/build-diagnostics/
           if-no-files-found: warn
+
+      - name: Upload symbolication files
+        uses: actions/upload-artifact@v6
+        with:
+          name: NFSMostWanted-iOS-symbolication
+          path: artifacts/symbolication/
+          if-no-files-found: error
 
       - name: Upload IPA
         uses: actions/upload-artifact@v6
