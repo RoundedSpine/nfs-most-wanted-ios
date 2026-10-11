@@ -38,7 +38,7 @@ void host_d9_texture_drop(uint32_t id);
 // One face/level from the shim's bytes, in the texture's D3DFORMAT.
 // For a volume, face is the Z slice at this mip level. Upload completes before
 // returning, so the caller may reuse the source bytes for the next slice.
-void host_d9_texture_upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+bool host_d9_texture_upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
                             uint32_t pitch);
 // Reads a colour face/level back as the texture's own format (32-bit formats
 // only). Waits for the GPU. Non-zero on success.
