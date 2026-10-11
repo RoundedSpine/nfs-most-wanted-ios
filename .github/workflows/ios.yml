@@ -176,6 +176,8 @@ jobs:
           EXEC="$APP/SpeedRecomp"
           test -f "$EXEC"
           mkdir -p artifacts/symbolication
+          IPA="artifacts/NFSMostWanted-iOS-unsigned.ipa"
+          test -s "$IPA"
           # Use the executable from the actual IPA, not merely a build-tree copy.
           /usr/bin/unzip -p "$IPA" Payload/SpeedRecomp.app/SpeedRecomp > artifacts/symbolication/SpeedRecomp
           chmod +x artifacts/symbolication/SpeedRecomp
