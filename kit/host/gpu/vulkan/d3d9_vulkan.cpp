@@ -515,14 +515,16 @@ class VkRenderer final : public D9Backend {
         textures_.erase(it);
     }
 
-    void upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+    bool upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
                 uint32_t pitch) override {
         Tex *tp = tex_ptr(id);
         if (!tp || !tp->image || !bytes)
-            return;
+            return false;
         Tex &t = *tp;
-        if (level >= t.levels || t.depth)
-            return;
+        if (t.depth)
+            return true;
+        if (level >= t.levels)
+            return false;
         uint32_t w = std::max<uint32_t>(t.desc.width >> level, 1);
         uint32_t h = std::max<uint32_t>(
             (t.desc.kind == HOST_D9_TEX_CUBE ? t.desc.width : t.desc.height) >> level, 1);
@@ -539,7 +541,7 @@ class VkRenderer final : public D9Backend {
                 memcpy(&packed[(size_t)y * bw * bpp], bytes + (size_t)y * pitch, (size_t)bw * bpp);
             copy_to_image(t, face, level, packed.data(), packed.size(), w, h);
             t.used = serial_ + 1;
-            return;
+            return true;
         }
         if (is_dxt(t.desc.format)) {
             // No BC support: decoded here.
@@ -571,6 +573,7 @@ class VkRenderer final : public D9Backend {
         }
         copy_to_image(t, face, level, packed.data(), packed.size(), pw, ph);
         t.used = serial_ + 1;
+        return true;
     }
 
     bool read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes, uint32_t pitch) override {
