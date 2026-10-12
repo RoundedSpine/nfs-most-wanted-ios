@@ -19,7 +19,12 @@ constexpr int kKnobSize = 256;
 } // namespace
 
 Overlay::~Overlay() {
+    shutdown();
+}
+
+void Overlay::shutdown() {
     release();
+    device_ = nullptr;
 }
 
 void Overlay::release() {
@@ -31,6 +36,9 @@ void Overlay::release() {
             device_->destroy(knob_);
     }
     layers_.clear();
+    quads_.clear();
+    pixels_.clear();
+    dw_ = dh_ = 0;
     knob_ = gpu::Texture();
     knob_opacity_ = -1;
 }
