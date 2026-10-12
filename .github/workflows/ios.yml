@@ -151,6 +151,72 @@ jobs:
             --unsigned \
             --no-install
 
+      # TEMPORARY: collect build-system evidence without modifying any build inputs.
+      - name: Capture FFmpeg and SDL3 linker diagnostics (temporary)
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="artifacts/toolchain-investigation"
+          mkdir -p "$OUT/ffmpeg" "$OUT/sdl3" "$OUT/linker"
+          ROOT="build/cmake/ios"
+          printf 'commit=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > "$OUT/manifest.txt"
+
+          # Capture generated FFmpeg configuration, not game assets or downloaded source.
+          find "$ROOT" -type f \( -name config.mak -o -name config.h -o -name library.mak \) -path '*ffmpeg*' -print 2>/dev/null > "$OUT/ffmpeg/config-file-paths.txt" || true
+          while IFS= read -r f; do
+            case "$f" in
+              */config.mak|*/config.h|*/library.mak)
+                dest="$OUT/ffmpeg/$(echo "$f" | sed 's#[/ ]#_#g')"
+                cp "$f" "$dest" 2>/dev/null || true ;;
+            esac
+          done < "$OUT/ffmpeg/config-file-paths.txt"
+          find "$ROOT" -type f -name 'aac_ac3_parser.c' -path '*ffmpeg*' -print -quit 2>/dev/null |
+          while IFS= read -r f; do
+            sed -n '65,195p' "$f" > "$OUT/ffmpeg/aac_ac3_parser-lines65-195.txt"
+          done
+
+          # Capture FFmpeg's generated link recipes and flags.
+          find "$ROOT" -type f \( -name Makefile -o -name 'config.mak' -o -name 'library.mak' \) -path '*ffmpeg*' -print 2>/dev/null |
+          while IFS= read -r f; do
+            grep -nE -- 'single_module|libpostproc|libswscale|libswresample|(^|[[:space:]])-lm|LDFLAGS|SHFLAGS|SLIB' "$f" 2>/dev/null |
+              head -n 160 | sed "s#^#$f:#" >> "$OUT/ffmpeg/link-flag-origins.txt" || true
+          done
+
+          # Examine Mach-O alignment metadata and common symbols; do not archive object files.
+          find "$ROOT" -type f \( -name '*.o' -o -name '*.dylib' \) -path '*ffmpeg*' -print 2>/dev/null > "$OUT/linker/ffmpeg-objects.txt" || true
+          if command -v xcrun >/dev/null; then
+            while IFS= read -r f; do
+              case "$f" in
+                *.o)
+                  xcrun nm -m "$f" 2>/dev/null | grep -Ei 'common|align' |
+                    head -n 40 | sed "s#^#$f: #" >> "$OUT/linker/ffmpeg-common-symbols.txt" || true ;;
+                *libavcodec*.dylib)
+                  xcrun otool -l "$f" > "$OUT/linker/libavcodec-load-commands.txt" 2>&1 || true ;;
+              esac
+            done < "$OUT/linker/ffmpeg-objects.txt"
+          fi
+          find "$ROOT" -type f \( -name '*.resp' -o -name 'project.pbxproj' \) -path '*sdl3*' -print 2>/dev/null > "$OUT/sdl3/generated-files.txt" || true
+          find "$ROOT" -type f -name '*.resp' -path '*SDL3-static*' -print 2>/dev/null |
+          while IFS= read -r f; do
+            grep -nE -- '(^|[[:space:]])-x[[:space:]]|objective-c|pch|PCH' "$f" |
+              head -n 80 | sed "s#^#$f:#" >> "$OUT/sdl3/response-flags.txt" || true
+          done
+          find "$ROOT" -type f -name project.pbxproj -print 2>/dev/null |
+          while IFS= read -r f; do
+            grep -nE 'GCC_PRECOMPILE_PREFIX_HEADER|GCC_PREFIX_HEADER|PRECOMPILE_HEADERS|OTHER_CFLAGS|OTHER_LDFLAGS|objc' "$f" |
+              head -n 140 | sed "s#^#$f:#" >> "$OUT/sdl3/xcode-settings.txt" || true
+          done
+          echo "Temporary toolchain investigation captured in $OUT"
+
+      - name: Upload temporary toolchain investigation
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: NFSMostWanted-iOS-toolchain-investigation
+          path: artifacts/toolchain-investigation/
+          if-no-files-found: warn
+
       - name: Create requested signing entitlements
         run: |
           set -euo pipefail
