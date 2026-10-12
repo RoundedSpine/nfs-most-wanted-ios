@@ -5,6 +5,14 @@ on:
       - testing/haptics-core-repair
   workflow_dispatch:
 jobs:
+  production-mailbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and stress-test production mailbox (ASan + UBSan)
+        run: |
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-omit-frame-pointer tests/haptics/request_mailbox_test.cpp -o /tmp/haptic-mailbox
+          /tmp/haptic-mailbox
   lifecycle-contract:
     runs-on: ubuntu-latest
     steps:
