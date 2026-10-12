@@ -37,7 +37,9 @@ void compile(X86 *c) {
     for (int field = 0; field < 2; ++field) {
         uint32_t p = arg(c, 5 + field);
         char *dest = field ? tag.target : tag.entry;
-        size_t cap = field ? sizeof(tag.target) : sizeof(tag.entry), i = 0;
+        const uint32_t cap = field ? static_cast<uint32_t>(sizeof(tag.target))
+                                   : static_cast<uint32_t>(sizeof(tag.entry));
+        uint32_t i = 0;
         for (; i + 1 < cap && dx11::span(p + i, 1) && rd8(p + i); ++i)
             dest[i] = char(rd8(p + i));
         if (!dx11::span(p + i, 1) || rd8(p + i)) {
