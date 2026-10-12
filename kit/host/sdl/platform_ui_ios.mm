@@ -130,6 +130,9 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
         crash_hex(" stop_player_at_entry=0x", g_haptic_stop_player_at_entry.load(std::memory_order_relaxed));
 
         crash_hex(" signal_code=0x", static_cast<uintptr_t>(info ? info->si_code : 0));
+    uint64_t fault_thread_id = 0;
+    (void)pthread_threadid_np(nullptr, &fault_thread_id);
+    crash_hex(" fault_thread_id=0x", static_cast<uintptr_t>(fault_thread_id));
 #if defined(__aarch64__) || defined(__arm64__)
         const auto *uc = static_cast<const ucontext_t *>(context);
         if (uc && uc->uc_mcontext) {
