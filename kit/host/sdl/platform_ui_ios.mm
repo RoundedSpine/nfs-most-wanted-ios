@@ -916,7 +916,9 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     g_haptic_generation.store(0, std::memory_order_relaxed);
               rumble_trace(ok && !error ? "UPDATE_OK" : "UPDATE_FAILED",
                            player, generation, intensity);
-              if (ok && !error) return;
+              if (ok && !error &&
+                  epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) return;
+              ++g_rumble_update_failures;
               // Attempt to stop a still-live player before replacing it.
               // Keep the local strong reference through cleanup.
               stop_rumble_player();
@@ -929,8 +931,22 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       if (!engine)
           return;
       error = nil;
-      BOOL started = [engine startAndReturnError:&error];
-      if (!started || error) {
+      const auto startup_epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
+      if (startup_epoch != g_rumble_player_engine_epoch && g_rumble_player)
+          forget_rumble_player("startup epoch changed");
+      if (g_rumble_engine_running &&
+          g_rumble_seen_reset_epoch != g_rumble_reset_epoch.load(std::memory_order_acquire))
+          g_rumble_engine_running = false;
+      BOOL started = YES;
+      if (!g_rumble_engine_running) {
+          ++g_rumble_start_attempts;
+          started = [engine startAndReturnError:&error];
+          if (started && !error &&
+              startup_epoch == g_rumble_engine_notifications.load(std::memory_order_acquire))
+              g_rumble_engine_running = true;
+      }
+      if (!started || error || !g_rumble_engine_running) {
+          ++g_rumble_start_failures;
           fprintf(stderr, "[ios] haptic engine start failed: %s\n",
                   error ? error.localizedDescription.UTF8String : "unknown error");
           return;
@@ -955,6 +971,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       id<CHHapticAdvancedPatternPlayer> player =
           [engine createAdvancedPlayerWithPattern:pattern error:&error];
       const uint64_t generation = ++g_rumble_next_generation;
+      ++g_rumble_player_creations;
       if (player) {
           // Avoid inspecting framework object metadata for diagnostic logging.
           rumble_trace("CREATE_RETURN", player, generation, intensity);
@@ -979,13 +996,15 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     g_haptic_receiver.store(0, std::memory_order_relaxed);
     g_haptic_generation.store(0, std::memory_order_relaxed);
       rumble_trace(ok && !error ? "START_OK" : "START_FAILED", player, generation, intensity);
-      if (ok && !error) {
+      if (ok && !error &&
+          startup_epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) {
           g_rumble_player = player;
           g_rumble_generation = generation;
           g_rumble_player_engine_epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
           g_rumble_active = true;
           rumble_trace("RETAINED", g_rumble_player, generation, intensity);
       } else {
+          g_rumble_engine_running = false;
           g_haptic_receiver.store(0, std::memory_order_relaxed);
           g_haptic_generation.store(0, std::memory_order_relaxed);
           fprintf(stderr, "[ios] haptic player start failed: %s\n",
