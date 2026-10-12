@@ -28,7 +28,7 @@ int main(){
  start=true;
  for(auto &t:workers)t.join();
  auto last=s.latest();
- assert(last.version==4+N*K);
+ assert(last.version==7+N*K);
  assert(!s.next(last));
  assert(s.publish(0,0));assert(s.latest().intensity==0);
  assert(!s.next(s.latest()));
