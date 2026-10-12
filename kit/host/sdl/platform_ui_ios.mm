@@ -847,6 +847,21 @@ void platform_ui_haptic_tap() {
 #define NFSMW_DISABLE_DEVICE_CORE_HAPTICS 0
 #endif
 
+void rumble_process_latest() {
+    // Callback-thread notifications only request main-queue reconciliation.
+    // A fresh request re-enters the existing serialized player logic.
+    if (!g_rumble_app_active) return;
+    const auto reset = g_rumble_reset_epoch.load(std::memory_order_acquire);
+    const auto stop = g_rumble_stop_epoch.load(std::memory_order_acquire);
+    if (reset == g_rumble_seen_reset_epoch && stop == g_rumble_seen_stop_epoch) return;
+    g_rumble_seen_reset_epoch = reset;
+    g_rumble_seen_stop_epoch = stop;
+    g_rumble_engine_running = false;
+    if (g_rumble_player) forget_rumble_player("engine notification");
+    // Defer actual restart to the next guest rumble command to avoid
+    // restarting during interruptions or while the app is suspended.
+}
+
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #if NFSMW_DISABLE_DEVICE_CORE_HAPTICS
     (void)low;
