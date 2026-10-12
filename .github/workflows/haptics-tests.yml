@@ -14,6 +14,14 @@ jobs:
           xcode-version: "16.4"
       - name: Compile actual iOS Objective-C++ bridge (arm64 iPhoneOS)
         run: bash tests/haptics/compile_ios_objcxx.sh
+  production-fault-injection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Simulate Core Haptics reset/stop races with production scheduler
+        run: |
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-omit-frame-pointer tests/haptics/production_scheduler_fault_test.cpp -o /tmp/haptic-fault
+          /tmp/haptic-fault
   production-scheduler:
     runs-on: ubuntu-latest
     steps:
