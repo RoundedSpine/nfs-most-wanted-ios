@@ -882,15 +882,16 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       do {
       const auto request = g_rumble_scheduler.latest();
       const float intensity = request.intensity / 65535.0f;
-      // Keep the existing Core Haptics operations within this iteration.
+      // One operation batch; early returns leave the scheduler drain intact.
+      [&] {
       if (!device_supports_haptics())
-          goto rumble_drain_next;
+          return;
       ios_capture_loaded_images("before_core_haptics");
       rumble_trace("REQUEST", g_rumble_player, g_rumble_generation, intensity);
       if (intensity <= 0.0f) {
           if (g_rumble_player)
               stop_rumble_player();
-          goto rumble_drain_next;
+          return;
       }
 
       NSError *error = nil;
@@ -918,7 +919,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
               rumble_trace(ok && !error ? "UPDATE_OK" : "UPDATE_FAILED",
                            player, generation, intensity);
               if (ok && !error &&
-                  epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) goto rumble_drain_next;
+                  epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) return;
               ++g_rumble_update_failures;
               // Attempt to stop a still-live player before replacing it.
               // Keep the local strong reference through cleanup.
@@ -930,7 +931,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 
       CHHapticEngine *engine = haptic_engine();
       if (!engine)
-          goto rumble_drain_next;
+          return;
       error = nil;
       const auto startup_epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
       if (startup_epoch != g_rumble_player_engine_epoch && g_rumble_player)
@@ -950,7 +951,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           ++g_rumble_start_failures;
           fprintf(stderr, "[ios] haptic engine start failed: %s\n",
                   error ? error.localizedDescription.UTF8String : "unknown error");
-          goto rumble_drain_next;
+          return;
       }
 
       CHHapticEventParameter *intensity_param = [[CHHapticEventParameter alloc]
@@ -966,7 +967,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
                                                               parameters:@[]
                                                                    error:&error];
       if (!pattern || error)
-          goto rumble_drain_next;
+          return;
       error = nil;
       rumble_trace("CREATE_BEGIN", nil, g_rumble_next_generation + 1, intensity);
       id<CHHapticAdvancedPatternPlayer> player =
@@ -983,7 +984,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       if (!player || error) {
           rumble_trace("CREATE_INVALID", player, generation, intensity);
           fprintf(stderr, "[ios] haptic player creation/type validation failed\n");
-          goto rumble_drain_next;
+          return;
       }
       player.loopEnabled = YES;
       player.loopEnd = kRumbleDuration;
@@ -1011,7 +1012,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           fprintf(stderr, "[ios] haptic player start failed: %s\n",
                   error ? error.localizedDescription.UTF8String : "unknown error");
       }
-rumble_drain_next:
+      }();
       again = g_rumble_scheduler.next(request);
       } while (again);
     });
