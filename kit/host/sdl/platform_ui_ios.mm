@@ -773,6 +773,8 @@ void stop_rumble_player() {
     NSError *error = nil;
     BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
     g_haptic_phase.store(0, std::memory_order_release);
+    g_haptic_receiver.store(0, std::memory_order_relaxed);
+    g_haptic_generation.store(0, std::memory_order_relaxed);
     rumble_trace(ok && !error ? "STOP_OK" : "STOP_FAILED", player, generation);
     if (!ok || error)
         fprintf(stderr, "[ios] rumble stop failed: %s\\n",
@@ -837,8 +839,10 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     if (g_rumble_drain_scheduled.exchange(true, std::memory_order_acq_rel))
         return;
     dispatch_async(dispatch_get_main_queue(), ^{
-      const float intensity = g_rumble_pending_intensity.load(std::memory_order_acquire) / 65535.0f;
+      // Release scheduling ownership before sampling the latest request.
+      // A concurrent producer can now always queue a follow-up drain.
       g_rumble_drain_scheduled.store(false, std::memory_order_release);
+      const float intensity = g_rumble_pending_intensity.load(std::memory_order_acquire) / 65535.0f;
       if (!device_supports_haptics())
           return;
       ios_capture_loaded_images("before_core_haptics");
@@ -869,6 +873,8 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
               BOOL ok = [player sendParameters:@[ param ]
                                         atTime:CHHapticTimeImmediate error:&error];
     g_haptic_phase.store(0, std::memory_order_release);
+    g_haptic_receiver.store(0, std::memory_order_relaxed);
+    g_haptic_generation.store(0, std::memory_order_relaxed);
               rumble_trace(ok && !error ? "UPDATE_OK" : "UPDATE_FAILED",
                            player, generation, intensity);
               if (ok && !error) return;
@@ -931,6 +937,8 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       rumble_trace("START_BEGIN", player, generation, intensity);
       BOOL ok = [player startAtTime:CHHapticTimeImmediate error:&error];
     g_haptic_phase.store(0, std::memory_order_release);
+    g_haptic_receiver.store(0, std::memory_order_relaxed);
+    g_haptic_generation.store(0, std::memory_order_relaxed);
       rumble_trace(ok && !error ? "START_OK" : "START_FAILED", player, generation, intensity);
       if (ok && !error) {
           g_rumble_player = player;
@@ -939,6 +947,8 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           g_rumble_active = true;
           rumble_trace("RETAINED", g_rumble_player, generation, intensity);
       } else {
+          g_haptic_receiver.store(0, std::memory_order_relaxed);
+          g_haptic_generation.store(0, std::memory_order_relaxed);
           fprintf(stderr, "[ios] haptic player start failed: %s\n",
                   error ? error.localizedDescription.UTF8String : "unknown error");
       }
