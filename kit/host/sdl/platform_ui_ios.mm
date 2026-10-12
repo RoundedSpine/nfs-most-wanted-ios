@@ -713,6 +713,21 @@ std::atomic<unsigned long long> g_rumble_engine_notifications{0};
 unsigned long long g_rumble_player_engine_epoch = 0;
 std::atomic<uint32_t> g_rumble_pending_intensity{0};
 std::atomic<bool> g_rumble_drain_scheduled{false};
+std::atomic<uint64_t> g_rumble_request_version{0};
+std::atomic<unsigned long long> g_rumble_reset_epoch{0};
+std::atomic<unsigned long long> g_rumble_stop_epoch{0};
+std::atomic<long> g_rumble_last_stop_reason{0};
+unsigned long long g_rumble_seen_reset_epoch = 0;
+unsigned long long g_rumble_seen_stop_epoch = 0;
+bool g_rumble_engine_running = false;
+bool g_rumble_engine_starting = false;
+bool g_rumble_app_active = true;
+uint64_t g_rumble_start_generation = 0;
+uint64_t g_rumble_start_attempts = 0;
+uint64_t g_rumble_start_failures = 0;
+uint64_t g_rumble_update_failures = 0;
+uint64_t g_rumble_player_creations = 0;
+void rumble_process_latest();
 
 void rumble_trace(const char *event, id player, uint64_t generation,
                   float intensity = -1.0f, const char *detail = "") {
@@ -797,12 +812,17 @@ CHHapticEngine *haptic_engine() {
         // after an interruption. The next request checks its command result
         // and recreates an invalid player as necessary.
         engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
-            g_rumble_engine_notifications.fetch_add(1, std::memory_order_release);
+            g_rumble_last_stop_reason.store((long)reason, std::memory_order_release);
+            g_rumble_stop_epoch.fetch_add(1, std::memory_order_acq_rel);
+            g_rumble_engine_notifications.fetch_add(1, std::memory_order_acq_rel);
             fprintf(stderr, "[ios] haptic engine stopped: %ld\n", (long)reason);
+            dispatch_async(dispatch_get_main_queue(), ^{ rumble_process_latest(); });
         };
         engine.resetHandler = ^{
-            g_rumble_engine_notifications.fetch_add(1, std::memory_order_release);
+            g_rumble_reset_epoch.fetch_add(1, std::memory_order_acq_rel);
+            g_rumble_engine_notifications.fetch_add(1, std::memory_order_acq_rel);
             fprintf(stderr, "[ios] haptic engine reset\n");
+            dispatch_async(dispatch_get_main_queue(), ^{ rumble_process_latest(); });
         };
         g_haptic_engine = engine;
     }
@@ -836,6 +856,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     // Coalesce rapid game-thread updates: the queued main-thread drain uses
     // the most recent request instead of replaying stale rumble commands.
     g_rumble_pending_intensity.store(std::max(low, high), std::memory_order_release);
+    g_rumble_request_version.fetch_add(1, std::memory_order_acq_rel);
     if (g_rumble_drain_scheduled.exchange(true, std::memory_order_acq_rel))
         return;
     dispatch_async(dispatch_get_main_queue(), ^{
