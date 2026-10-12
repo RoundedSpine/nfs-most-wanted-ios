@@ -5,6 +5,14 @@ on:
       - testing/haptics-core-repair
   workflow_dispatch:
 jobs:
+  production-scheduler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and stress-test production single-owner drain
+        run: |
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-omit-frame-pointer tests/haptics/drain_scheduler_test.cpp -o /tmp/haptic-drain
+          /tmp/haptic-drain
   production-mailbox:
     runs-on: ubuntu-latest
     steps:
