@@ -168,7 +168,8 @@ extern "C" void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgb
                                    int rw, int rh) {
     std::lock_guard held(state().lock);
     gpu::Device *d = device();
-    if (!d || !rgba || rw <= 0 || rh <= 0 || x < 0 || y < 0 || x + rw > w || y + rh > h)
+    if (!d || !rgba || w <= 0 || h <= 0 || rw <= 0 || rh <= 0 ||
+        x < 0 || y < 0 || x > w || y > h || rw > w - x || rh > h - y)
         return;
     Surface *t = surface(d, id, w, h);
     if (!t)
@@ -278,8 +279,13 @@ bool host_gpu2d_stage(uint32_t id, int w, int h) {
 // For hosts that build their frames from CPU pixels (the smoke host): the
 // render target read back and presented as a snapshot.
 extern "C" void host_gpu2d_present_readback(uint32_t id, int w, int h) {
+    if (w <= 0 || h <= 0)
+        return;
+    constexpr size_t kMaxReadbackPixels = 4096ull * 4096ull;
+    if (size_t(w) > kMaxReadbackPixels / size_t(h))
+        return;
     std::lock_guard held(state().lock);
-    std::vector<uint8_t> rgba(size_t(w) * h * 4);
+    std::vector<uint8_t> rgba(size_t(w) * size_t(h) * 4);
     if (!host_gpu2d_readback(id, w, h, rgba.data()))
         return;
     std::vector<uint32_t> argb(size_t(w) * h);
