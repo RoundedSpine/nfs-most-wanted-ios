@@ -11,6 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Audit implemented lifecycle contracts and report remaining gaps
         run: python3 tests/haptics/lifecycle_contract_test.py
+  lifecycle-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run deterministic lifecycle fault injection (ASan + UBSan)
+        run: |
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/haptics/lifecycle_model_test.cpp -o /tmp/haptics-lifecycle-model
+          /tmp/haptics-lifecycle-model
   rumble-router:
     runs-on: ubuntu-latest
     steps:
