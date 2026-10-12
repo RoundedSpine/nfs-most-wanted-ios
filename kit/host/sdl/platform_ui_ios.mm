@@ -711,6 +711,8 @@ uint64_t g_rumble_next_generation = 0;
 uint64_t g_rumble_sequence = 0;
 std::atomic<unsigned long long> g_rumble_engine_notifications{0};
 unsigned long long g_rumble_player_engine_epoch = 0;
+std::atomic<uint32_t> g_rumble_pending_intensity{0};
+std::atomic<bool> g_rumble_drain_scheduled{false};
 
 void rumble_trace(const char *event, id player, uint64_t generation,
                   float intensity = -1.0f, const char *detail = "") {
@@ -741,6 +743,8 @@ bool device_supports_haptics() {
 void forget_rumble_player(const char *reason = "forget") {
     rumble_trace("RELEASE_BEGIN", g_rumble_player, g_rumble_generation, -1, reason);
     g_rumble_player = nil;
+    g_haptic_receiver.store(0, std::memory_order_relaxed);
+    g_haptic_generation.store(0, std::memory_order_relaxed);
     g_rumble_active = false;
     g_rumble_generation = 0;
     g_rumble_player_engine_epoch = 0;
@@ -827,8 +831,14 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     (void)high;
     return;
 #else
-    const float intensity = std::max(low, high) / 65535.0f;
+    // Coalesce rapid game-thread updates: the queued main-thread drain uses
+    // the most recent request instead of replaying stale rumble commands.
+    g_rumble_pending_intensity.store(std::max(low, high), std::memory_order_release);
+    if (g_rumble_drain_scheduled.exchange(true, std::memory_order_acq_rel))
+        return;
     dispatch_async(dispatch_get_main_queue(), ^{
+      const float intensity = g_rumble_pending_intensity.load(std::memory_order_acquire) / 65535.0f;
+      g_rumble_drain_scheduled.store(false, std::memory_order_release);
       if (!device_supports_haptics())
           return;
       ios_capture_loaded_images("before_core_haptics");
@@ -862,7 +872,9 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
               rumble_trace(ok && !error ? "UPDATE_OK" : "UPDATE_FAILED",
                            player, generation, intensity);
               if (ok && !error) return;
-              forget_rumble_player("update failed");
+              // Attempt to stop a still-live player before replacing it.
+              // Keep the local strong reference through cleanup.
+              stop_rumble_player();
           } else {
               forget_rumble_player("inactive player");
           }
