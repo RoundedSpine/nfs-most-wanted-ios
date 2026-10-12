@@ -802,7 +802,8 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       ios_capture_loaded_images("before_core_haptics");
       rumble_trace("REQUEST", g_rumble_player, g_rumble_generation, intensity);
       if (intensity <= 0.0f) {
-          stop_rumble_player();
+          if (g_rumble_player)
+              stop_rumble_player();
           return;
       }
 
@@ -866,9 +867,8 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           [engine createAdvancedPlayerWithPattern:pattern error:&error];
       const uint64_t generation = ++g_rumble_next_generation;
       if (player) {
-          // Class is captured only while the newly created object is strongly held.
-          const char *name = class_getName(object_getClass(player));
-          rumble_trace("CREATE_RETURN", player, generation, intensity, name ? name : "unknown-class");
+          // Avoid inspecting framework object metadata for diagnostic logging.
+          rumble_trace("CREATE_RETURN", player, generation, intensity);
       } else {
           rumble_trace("CREATE_NULL", nil, generation, intensity);
       }
