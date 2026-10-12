@@ -33,9 +33,9 @@ void RumbleRouter::update(uint64_t serial, uint16_t low, uint16_t high, RumbleSi
     }
     const bool on = low_ != 0 || high_ != 0;
     if (!on) {
-        if (changed) { // a stop request: whatever was running, and the other sink too
-            send(RumbleSink::Controller, 0, 0);
-            send(RumbleSink::Device, 0, 0);
+        if (changed && active_ != RumbleSink::None) {
+            // Stop only the output that was actually active.
+            send(active_, 0, 0);
         }
         active_ = RumbleSink::None;
         return;
@@ -57,8 +57,8 @@ void RumbleRouter::update(uint64_t serial, uint16_t low, uint16_t high, RumbleSi
 
 void RumbleRouter::stop() {
     low_ = high_ = 0;
-    send(RumbleSink::Controller, 0, 0);
-    send(RumbleSink::Device, 0, 0);
+    if (active_ != RumbleSink::None)
+        send(active_, 0, 0);
     active_ = RumbleSink::None;
 }
 
