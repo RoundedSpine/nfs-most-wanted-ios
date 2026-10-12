@@ -44,6 +44,7 @@ namespace fs = std::filesystem;
 #include <limits.h>
 #include <cstring>
 #include <sys/ucontext.h>
+#include <time.h>
 
 
 namespace {
@@ -74,6 +75,13 @@ void crash_hex(const char *label, uintptr_t value) {
 // The signal handler only uses async-signal-safe operations. The native .ips
 // report and matching dSYM are still needed for full symbolicated stacks.
 void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
+    // Identify the process and time before register capture.
+    crash_hex("pid=0x", static_cast<uintptr_t>(getpid()));
+    struct timespec ts = {};
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        crash_hex(" epoch_sec=0x", static_cast<uintptr_t>(ts.tv_sec));
+        crash_hex(" epoch_nsec=0x", static_cast<uintptr_t>(ts.tv_nsec));
+    }
     static const char prefix[] = "fatal signal ";
     // Include the fault address in the async-signal-safe log as hexadecimal.
     static const char addr_prefix[] = " address=0x";
@@ -98,6 +106,7 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
         crash_hex("haptic phase=0x", g_haptic_phase.load(std::memory_order_relaxed));
         crash_hex(" receiver=0x", g_haptic_receiver.load(std::memory_order_relaxed));
         crash_hex(" generation=0x", g_haptic_generation.load(std::memory_order_relaxed));
+        crash_hex(" signal_code=0x", static_cast<uintptr_t>(info ? info->si_code : 0));
 #if defined(__aarch64__) || defined(__arm64__)
         const auto *uc = static_cast<const ucontext_t *>(context);
         if (uc && uc->uc_mcontext) {
@@ -109,6 +118,14 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
             crash_hex(" x1=0x", state.__x[1]);
             crash_hex(" x2=0x", state.__x[2]);
             crash_hex(" x19=0x", state.__x[19]);
+            crash_hex(" x20=0x", state.__x[20]);
+            crash_hex(" x21=0x", state.__x[21]);
+            crash_hex(" fp=0x", state.__fp);
+            crash_hex(" sp=0x", state.__sp);
+            for (unsigned int reg = 3; reg <= 18; ++reg) {
+                static const char *labels[] = {" x3=0x", " x4=0x", " x5=0x", " x6=0x", " x7=0x", " x8=0x", " x9=0x", " x10=0x", " x11=0x", " x12=0x", " x13=0x", " x14=0x", " x15=0x", " x16=0x", " x17=0x", " x18=0x"};
+                crash_hex(labels[reg - 3], state.__x[reg]);
+            }
         }
 #endif
         (void)write(g_crash_fd, suffix, sizeof(suffix) - 1);
@@ -118,6 +135,10 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
     def.sa_handler = SIG_DFL;
     sigemptyset(&def.sa_mask);
     sigaction(signo, &def, nullptr);
+    sigset_t unblock;
+    sigemptyset(&unblock);
+    sigaddset(&unblock, signo);
+    sigprocmask(SIG_UNBLOCK, &unblock, nullptr);
     kill(getpid(), signo);
     _exit(128 + signo);
 }
