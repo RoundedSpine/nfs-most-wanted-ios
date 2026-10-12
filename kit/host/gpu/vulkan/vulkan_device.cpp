@@ -21,6 +21,8 @@ VkFormat vk_format(Format f) {
         return VK_FORMAT_R8G8B8A8_UNORM;
     case Format::R8:
         return VK_FORMAT_R8_UNORM;
+    case Format::RGBA16F:
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
     case Format::Depth32F:
         return VK_FORMAT_D32_SFLOAT;
     }
@@ -33,6 +35,8 @@ Format format_of(VkFormat f) {
         return Format::RGBA8;
     case VK_FORMAT_R8_UNORM:
         return Format::R8;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return Format::RGBA16F;
     case VK_FORMAT_D32_SFLOAT:
         return Format::Depth32F;
     default:
@@ -41,7 +45,7 @@ Format format_of(VkFormat f) {
 }
 
 static int bytes_per_pixel(Format f) {
-    return f == Format::R8 ? 1 : 4;
+    return f == Format::R8 ? 1 : f == Format::RGBA16F ? 8 : 4;
 }
 
 static VkImageAspectFlags aspect_of(Format f) {
