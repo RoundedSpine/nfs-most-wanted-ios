@@ -847,6 +847,7 @@ void platform_ui_haptic_tap() {
 #define NFSMW_DISABLE_DEVICE_CORE_HAPTICS 0
 #endif
 
+namespace {
 void rumble_process_latest() {
     // Callback-thread notifications only request main-queue reconciliation.
     // A fresh request re-enters the existing serialized player logic.
@@ -861,6 +862,8 @@ void rumble_process_latest() {
     // Defer actual restart to the next guest rumble command to avoid
     // restarting during interruptions or while the app is suspended.
 }
+
+} // namespace
 
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #if NFSMW_DISABLE_DEVICE_CORE_HAPTICS
