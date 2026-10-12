@@ -12,6 +12,8 @@ jobs:
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16.4"
+      - name: Install SDL3 headers for Objective-C++ syntax check
+        run: brew install sdl3
       - name: Compile actual iOS Objective-C++ bridge (arm64 iPhoneOS)
         run: bash tests/haptics/compile_ios_objcxx.sh
   production-fault-injection:
