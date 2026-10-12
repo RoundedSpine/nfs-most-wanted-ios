@@ -3,6 +3,7 @@
 // developer build or from files the player chose), the launcher's platform,
 // and the app lifecycle mapped onto audio and presentation.
 #include "platform_ui.h"
+#include "haptic_request_mailbox.h"
 
 #include "../../platform/os.h"
 #include "../../runtime/layout.h"
@@ -711,9 +712,9 @@ uint64_t g_rumble_next_generation = 0;
 uint64_t g_rumble_sequence = 0;
 std::atomic<unsigned long long> g_rumble_engine_notifications{0};
 unsigned long long g_rumble_player_engine_epoch = 0;
-std::atomic<uint32_t> g_rumble_pending_intensity{0};
+HapticRequestMailbox g_rumble_mailbox;
 std::atomic<bool> g_rumble_drain_scheduled{false};
-std::atomic<uint64_t> g_rumble_request_version{0};
+
 std::atomic<unsigned long long> g_rumble_reset_epoch{0};
 std::atomic<unsigned long long> g_rumble_stop_epoch{0};
 std::atomic<long> g_rumble_last_stop_reason{0};
@@ -873,15 +874,15 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #else
     // Coalesce rapid game-thread updates: the queued main-thread drain uses
     // the most recent request instead of replaying stale rumble commands.
-    g_rumble_pending_intensity.store(std::max(low, high), std::memory_order_release);
-    g_rumble_request_version.fetch_add(1, std::memory_order_acq_rel);
+    g_rumble_mailbox.publish(low, high);
     if (g_rumble_drain_scheduled.exchange(true, std::memory_order_acq_rel))
         return;
     dispatch_async(dispatch_get_main_queue(), ^{
       // Release scheduling ownership before sampling the latest request.
       // A concurrent producer can now always queue a follow-up drain.
       g_rumble_drain_scheduled.store(false, std::memory_order_release);
-      const float intensity = g_rumble_pending_intensity.load(std::memory_order_acquire) / 65535.0f;
+      const auto request = g_rumble_mailbox.latest();
+      const float intensity = request.intensity / 65535.0f;
       if (!device_supports_haptics())
           return;
       ios_capture_loaded_images("before_core_haptics");
