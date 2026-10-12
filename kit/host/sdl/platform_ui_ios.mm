@@ -915,6 +915,12 @@ void platform_ui_haptic_tap() {
 #ifndef NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
 #define NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP 1
 #endif
+// Default experiment: UIKit feedback instead of Core Haptics advanced players.
+// Set to 0 to restore the previous continuous-rumble implementation.
+#ifndef NFSMW_USE_UIKIT_RUMBLE
+#define NFSMW_USE_UIKIT_RUMBLE 1
+#endif
+
 
 namespace {
 void rumble_process_latest() {
@@ -935,7 +941,38 @@ void rumble_process_latest() {
 } // namespace
 
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
-#if NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+#if NFSMW_USE_UIKIT_RUMBLE && !NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+    // UIKit's impact generator provides discrete pulses, not continuous rumble.
+    // Throttle the game-thread requests before dispatching to the main queue;
+    // never construct or message a CHHapticAdvancedPatternPlayer in this mode.
+    const uint16_t strength = std::max(low, high);
+    if (!strength) return;
+    constexpr uint64_t kMinPulseIntervalNs = 150000000ull; // <= ~6.7 Hz
+    static std::atomic<uint64_t> last_pulse_ns{0};
+    struct timespec ts = {};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return;
+    const uint64_t now = uint64_t(ts.tv_sec) * 1000000000ull +
+                         uint64_t(ts.tv_nsec);
+    uint64_t previous = last_pulse_ns.load(std::memory_order_relaxed);
+    while (now >= previous &&
+           now - previous >= kMinPulseIntervalNs) {
+        if (last_pulse_ns.compare_exchange_weak(
+                previous, now, std::memory_order_relaxed)) {
+            const CGFloat intensity = std::max<CGFloat>(
+                0.15, CGFloat(strength) / 65535.0);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                static UIImpactFeedbackGenerator *generator = nil;
+                if (!generator)
+                    generator = [[UIImpactFeedbackGenerator alloc]
+                        initWithStyle:UIImpactFeedbackStyleMedium];
+                [generator impactOccurredWithIntensity:intensity];
+                ios_diagnostic("rumble UIKit impact dispatched");
+            });
+            break;
+        }
+    }
+    return;
+#elif NFSMW_DISABLE_DEVICE_CORE_HAPTICS
     (void)low;
     (void)high;
     return;
