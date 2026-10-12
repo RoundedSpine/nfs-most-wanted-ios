@@ -2178,7 +2178,11 @@ int main(int argc, char **argv) {
         fflush(nullptr);
         _Exit(4);
     }
+    fprintf(stderr, "[shutdown] guest threads stopped; blocking new window presents\n");
+    host_display_begin_shutdown();
+    fprintf(stderr, "[shutdown] stopping presentation worker\n");
     host_present_stop(); // scheduler has stopped; join outside the guest baton
+    fprintf(stderr, "[shutdown] presentation worker joined\n");
     host_audio_capture_end();
     boot_report_lock();
     report(stdout, false);
