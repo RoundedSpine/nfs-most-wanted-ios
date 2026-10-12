@@ -815,9 +815,10 @@ void stop_rumble_player() {
     g_haptic_generation.store(generation, std::memory_order_relaxed);
     g_haptic_phase.store(1, std::memory_order_release);
     struct timespec stop_clock = {};
-    (void)clock_gettime(CLOCK_MONOTONIC, &stop_clock);
-    g_haptic_stop_begin_ns.store(uint64_t(stop_clock.tv_sec) * 1000000000ull +
-                                 uint64_t(stop_clock.tv_nsec), std::memory_order_relaxed);
+    if (clock_gettime(CLOCK_MONOTONIC, &stop_clock) == 0) {
+        g_haptic_stop_begin_ns.store(uint64_t(stop_clock.tv_sec) * 1000000000ull +
+                                     uint64_t(stop_clock.tv_nsec), std::memory_order_relaxed);
+    }
     g_haptic_operation_serial.fetch_add(1, std::memory_order_relaxed);
     g_haptic_engine_epoch_snapshot.store(epoch, std::memory_order_relaxed);
     g_haptic_engine_pointer.store(reinterpret_cast<uintptr_t>((__bridge void *)g_haptic_engine),
@@ -835,8 +836,16 @@ void stop_rumble_player() {
     rumble_trace("STOP_SEND_BEGIN", player, generation);
     NSError *error = nil;
     BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
-    g_haptic_last_stop_ns.store(g_haptic_stop_begin_ns.load(std::memory_order_relaxed),
-                                std::memory_order_relaxed);
+    // Record completion separately from the attempt timestamp. A crash during
+    // Objective-C dispatch leaves this value unchanged, identifying the last
+    // completed stop rather than incorrectly recording an attempted stop.
+    struct timespec stop_complete_clock = {};
+    if (clock_gettime(CLOCK_MONOTONIC, &stop_complete_clock) == 0) {
+        g_haptic_last_stop_ns.store(
+            uint64_t(stop_complete_clock.tv_sec) * 1000000000ull +
+                uint64_t(stop_complete_clock.tv_nsec),
+            std::memory_order_relaxed);
+    }
     g_haptic_phase.store(0, std::memory_order_release);
     g_haptic_receiver.store(0, std::memory_order_relaxed);
     g_haptic_generation.store(0, std::memory_order_relaxed);
@@ -1030,7 +1039,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       } else {
           rumble_trace("CREATE_NULL", nil, generation, intensity);
       }
-      rumble_trace("CREATE_VALIDATE_BEGIN", player, generation, intensity);
+      rumble_trace("CREATE_RESULT_CHECK", player, generation, intensity);
       if (!player || error) {
           rumble_trace("CREATE_INVALID", player, generation, intensity);
           fprintf(stderr, "[ios] haptic player creation/type validation failed\n");
