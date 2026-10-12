@@ -1,0 +1,13 @@
+# Remove only the obsolete Apple linker option emitted by FFmpeg 7.1.1.
+if(NOT EXISTS "${FFMPEG_CONFIG_MAK}")
+  message(FATAL_ERROR "FFmpeg config.mak missing: ${FFMPEG_CONFIG_MAK}")
+endif()
+file(READ "${FFMPEG_CONFIG_MAK}" contents)
+if(NOT contents MATCHES "SHFLAGS=-dynamiclib")
+  message(FATAL_ERROR "Unexpected FFmpeg shared-link configuration")
+endif()
+string(REPLACE " -Wl,-single_module" "" updated "${contents}")
+if(NOT updated STREQUAL contents)
+  file(WRITE "${FFMPEG_CONFIG_MAK}" "${updated}")
+  message(STATUS "Removed obsolete FFmpeg -single_module linker flag")
+endif()
