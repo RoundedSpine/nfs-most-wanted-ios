@@ -1210,6 +1210,17 @@ void host_present_set_sched_probe(void (*probe)(uint64_t out[8])) {
 }
 
 void host_present_set_device(gpu::Device *device) {
+    // The presenter and its overlays borrow this pointer. Replacing it while
+    // a service is running would leave GPU resources owned by the old device.
+    // Call host_present_stop() while the old device is still alive first.
+    if (auto s = active.load()) {
+        std::lock_guard lock(s->mutex);
+        if (!s->stop && s->device && s->device != device) {
+            fprintf(stderr,
+                    "presenter: GPU device replacement requires host_present_stop() before destroying the old device\n");
+            abort();
+        }
+    }
     g_device = device;
 }
 gpu::Device *host_present_device() {
