@@ -39,6 +39,10 @@ namespace fs = std::filesystem;
 #include <execinfo.h>
 #include <inttypes.h>
 #include <objc/runtime.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <limits.h>
+#include <cstring>
 
 
 namespace {
@@ -146,6 +150,75 @@ void ios_start_crash_monitor() {
     }).detach();
 }
 
+
+ // Snapshot dyld's loaded images outside signal handlers. Each Mach-O segment
+ // contributes to the address range; the slide is per image, not per segment.
+ // Snapshots are append-only so a crash cannot erase the previous complete one.
+ void ios_capture_loaded_images(const char *reason) {
+     static std::mutex image_mutex;
+     static auto last_capture = std::chrono::steady_clock::time_point::min();
+     std::lock_guard<std::mutex> guard(image_mutex);
+     const auto now = std::chrono::steady_clock::now();
+     if (last_capture != std::chrono::steady_clock::time_point::min() &&
+         now - last_capture < std::chrono::seconds(1)) return;
+     last_capture = now;
+     @autoreleasepool {
+         NSArray *dirs = NSSearchPathForDirectoriesInDomains(
+             NSDocumentDirectory, NSUserDomainMask, YES);
+         if (!dirs.count) return;
+         NSString *folder = [dirs[0] stringByAppendingPathComponent:@"diagnostics"];
+         [[NSFileManager defaultManager] createDirectoryAtPath:folder
+                         withIntermediateDirectories:YES attributes:nil error:nil];
+         NSString *path = [folder stringByAppendingPathComponent:@"loaded-images.log"];
+         FILE *out = fopen(path.fileSystemRepresentation, "a");
+         if (!out) return;
+         const uint32_t count = _dyld_image_count();
+         fprintf(out, "SNAPSHOT_BEGIN reason=%s count=%u\n", reason, count);
+         for (uint32_t i = 0; i < count; ++i) {
+             const mach_header *header = _dyld_get_image_header(i);
+             if (!header || header->magic != MH_MAGIC_64) continue;
+             const auto *h = reinterpret_cast<const mach_header_64 *>(header);
+             const intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+             const char *name = _dyld_get_image_name(i);
+             uintptr_t lo = UINTPTR_MAX, hi = 0;
+             unsigned char uuid[16] = {};
+             bool has_uuid = false;
+             const uint8_t *cursor = reinterpret_cast<const uint8_t *>(h + 1);
+             const uint8_t *end = cursor + h->sizeofcmds;
+             for (uint32_t c = 0; c < h->ncmds; ++c) {
+                 if (cursor > end || static_cast<size_t>(end - cursor) < sizeof(load_command)) break;
+                 const auto *cmd = reinterpret_cast<const load_command *>(cursor);
+                 if (cmd->cmdsize < sizeof(load_command) ||
+                     static_cast<size_t>(end - cursor) < cmd->cmdsize) break;
+                 if (cmd->cmd == LC_UUID && cmd->cmdsize >= sizeof(uuid_command)) {
+                     std::memcpy(uuid, reinterpret_cast<const uuid_command *>(cmd)->uuid, 16);
+                     has_uuid = true;
+                 } else if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(segment_command_64)) {
+                     const auto *seg = reinterpret_cast<const segment_command_64 *>(cmd);
+                     if (seg->vmsize && seg->vmaddr <= UINTPTR_MAX - static_cast<uintptr_t>(slide) &&
+                         seg->vmsize <= UINTPTR_MAX - (static_cast<uintptr_t>(seg->vmaddr) + static_cast<uintptr_t>(slide))) {
+                         const uintptr_t start = static_cast<uintptr_t>(seg->vmaddr) + static_cast<uintptr_t>(slide);
+                         lo = std::min(lo, start);
+                         hi = std::max(hi, start + static_cast<uintptr_t>(seg->vmsize));
+                     }
+                 }
+                 cursor += cmd->cmdsize;
+             }
+             if (lo == UINTPTR_MAX) lo = 0;
+             fprintf(out, "IMAGE index=%u start=0x%llx end=0x%llx slide=0x%llx uuid=",
+                     i, (unsigned long long)lo, (unsigned long long)hi,
+                     (unsigned long long)static_cast<uintptr_t>(slide));
+             if (has_uuid) {
+                 for (unsigned char b : uuid) fprintf(out, "%02x", b);
+             } else fputs("unknown", out);
+             fprintf(out, " path=%s\n", name ? name : "(unknown)");
+         }
+         fputs("SNAPSHOT_END\n", out);
+         fflush(out);
+         fclose(out);
+     }
+ }
+
 void ios_diagnostic(const char *event) {
     std::lock_guard<std::mutex> lock(g_diag_mutex);
     @autoreleasepool {
@@ -195,7 +268,8 @@ void platform_ui_init_hints() {
     // put there with devicectl (see tools/ios_logs.py for the container).
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
     ios_start_crash_monitor();
-    ios_diagnostic("platform init; diagnostics v3 footprint peak available memory_warning interval=1s");
+    ios_diagnostic("platform init; diagnostics v4 loaded image mapping footprint peak available memory_warning interval=1s");
+    ios_capture_loaded_images("startup");
 }
 
 // Documents/game when it is ready. Anything else - no game yet, a bundled copy
@@ -673,6 +747,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!device_supports_haptics())
           return;
+      ios_capture_loaded_images("before_core_haptics");
       rumble_trace("REQUEST", g_rumble_player, g_rumble_generation, intensity);
       if (intensity <= 0.0f) {
           stop_rumble_player();
