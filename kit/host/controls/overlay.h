@@ -94,6 +94,9 @@ ControlsView make_view(const Editor &e, const Screen &s);
 class Overlay {
   public:
     ~Overlay();
+    // Release GPU resources while the owning device is still alive.
+    // Safe to call again from the destructor after presenter shutdown.
+    void shutdown();
     // Re-rasterizes each layer whose revision or the drawable size changed,
     // then blends the layers and held knobs over `target`. Nothing while
     // !view.wanted.
