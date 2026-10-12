@@ -732,7 +732,7 @@ void stop_rumble_player() {
     const uint64_t generation = g_rumble_generation;
     rumble_trace("STOP_BEGIN", player, generation);
     if (!player) {
-        forget_rumble_player("stop empty");
+        // No Objective-C message or redundant release/logging for a nil player.
         return;
     }
     const auto epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
