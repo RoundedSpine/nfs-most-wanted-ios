@@ -41,6 +41,7 @@ namespace {
 int g_mode_w = 0, g_mode_h = 0, g_mode_bpp = 0;
 void (*g_mode_cb)(int, int, int) = nullptr;
 uint32_t g_present_count = 0;
+std::atomic<bool> g_display_shutdown{false};
 
 double now_seconds() {
     return (double)os_monotonic_ns() * 1e-9;
@@ -241,8 +242,12 @@ extern "C" int host_display_offer_mode(int w, int h, int bpp) {
 bool host_gpu2d_stage(uint32_t id, int w, int h);
 // A window frame drawn on the GPU (host/gpu2d.cpp): the render target is copied
 // into the frame on the device, with no pixels on the CPU at all.
+extern "C" void host_display_begin_shutdown(void) {
+    g_display_shutdown.store(true, std::memory_order_release);
+}
+
 extern "C" void host_display_present_gpu2d(uint32_t id, int w, int h) {
-    if (w <= 0 || h <= 0)
+    if (g_display_shutdown.load(std::memory_order_acquire) || w <= 0 || h <= 0)
         return;
     if (g_mode_w != w || g_mode_h != h || g_mode_bpp != 32)
         host_set_display_mode(w, h, 32);
@@ -257,7 +262,10 @@ extern "C" void host_display_present_gpu2d(uint32_t id, int w, int h) {
     host_present_seal_window();
 }
 extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
-    if (!argb || w <= 0 || h <= 0)
+    if (g_display_shutdown.load(std::memory_order_acquire) || !argb || w <= 0 || h <= 0)
+        return;
+    constexpr size_t kMaxFramePixels = 4096ull * 4096ull;
+    if (size_t(w) > kMaxFramePixels / size_t(h))
         return;
     if (g_mode_w != w || g_mode_h != h || g_mode_bpp != 32)
         host_set_display_mode(w, h, 32);
