@@ -5,6 +5,12 @@ on:
       - testing/haptics-core-repair
   workflow_dispatch:
 jobs:
+  lifecycle-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit implemented lifecycle contracts and report remaining gaps
+        run: python3 tests/haptics/lifecycle_contract_test.py
   rumble-router:
     runs-on: ubuntu-latest
     steps:
