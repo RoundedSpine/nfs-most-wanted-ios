@@ -43,6 +43,7 @@ namespace fs = std::filesystem;
 #include <mach-o/loader.h>
 #include <limits.h>
 #include <cstring>
+#include <sys/ucontext.h>
 
 
 namespace {
@@ -52,10 +53,27 @@ void ios_diagnostic(const char *event);
 std::atomic<bool> g_crash_monitor_started{false};
 std::atomic<unsigned long long> g_peak_footprint{0};
 int g_crash_fd = -1;
+std::atomic<uintptr_t> g_haptic_receiver{0};
+std::atomic<uint64_t> g_haptic_generation{0};
+std::atomic<unsigned int> g_haptic_phase{0}; // 1 stop, 2 update, 3 start
+void crash_hex(const char *label, uintptr_t value) {
+    if (g_crash_fd < 0) return;
+    size_t n = 0;
+    while (label[n]) ++n;
+    (void)write(g_crash_fd, label, n);
+    char digits_out[2 * sizeof(uintptr_t)];
+    const char digits[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < sizeof(digits_out); ++i) {
+        digits_out[sizeof(digits_out) - i - 1] = digits[value & 15u];
+        value >>= 4;
+    }
+    (void)write(g_crash_fd, digits_out, sizeof(digits_out));
+}
+
 
 // The signal handler only uses async-signal-safe operations. The native .ips
 // report and matching dSYM are still needed for full symbolicated stacks.
-void ios_fatal_signal(int signo, siginfo_t *info, void *) {
+void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
     static const char prefix[] = "fatal signal ";
     // Include the fault address in the async-signal-safe log as hexadecimal.
     static const char addr_prefix[] = " address=0x";
@@ -76,6 +94,23 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *) {
             address >>= 4;
         }
         (void)write(g_crash_fd, hex, sizeof(hex));
+        (void)write(g_crash_fd, suffix, sizeof(suffix) - 1);
+        crash_hex("haptic phase=0x", g_haptic_phase.load(std::memory_order_relaxed));
+        crash_hex(" receiver=0x", g_haptic_receiver.load(std::memory_order_relaxed));
+        crash_hex(" generation=0x", g_haptic_generation.load(std::memory_order_relaxed));
+#if defined(__aarch64__) || defined(__arm64__)
+        const auto *uc = static_cast<const ucontext_t *>(context);
+        if (uc && uc->uc_mcontext) {
+            const auto &state = uc->uc_mcontext->__ss;
+            crash_hex(" pc=0x", state.__pc);
+            crash_hex(" lr=0x", state.__lr);
+            crash_hex(" far=0x", uc->uc_mcontext->__es.__far);
+            crash_hex(" x0=0x", state.__x[0]);
+            crash_hex(" x1=0x", state.__x[1]);
+            crash_hex(" x2=0x", state.__x[2]);
+            crash_hex(" x19=0x", state.__x[19]);
+        }
+#endif
         (void)write(g_crash_fd, suffix, sizeof(suffix) - 1);
     }
     // Re-raise with the default disposition to preserve the iOS crash report.
@@ -706,9 +741,13 @@ void stop_rumble_player() {
         forget_rumble_player("engine changed");
         return;
     }
+    g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
+    g_haptic_generation.store(generation, std::memory_order_relaxed);
+    g_haptic_phase.store(1, std::memory_order_release);
     rumble_trace("STOP_SEND_BEGIN", player, generation);
     NSError *error = nil;
     BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
+    g_haptic_phase.store(0, std::memory_order_release);
     rumble_trace(ok && !error ? "STOP_OK" : "STOP_FAILED", player, generation);
     if (!ok || error)
         fprintf(stderr, "[ios] rumble stop failed: %s\\n",
@@ -780,9 +819,13 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
               CHHapticDynamicParameter *param = [[CHHapticDynamicParameter alloc]
                   initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
                                 value:intensity relativeTime:0];
+    g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
+    g_haptic_generation.store(generation, std::memory_order_relaxed);
+    g_haptic_phase.store(2, std::memory_order_release);
               rumble_trace("UPDATE_SEND_BEGIN", player, generation, intensity);
               BOOL ok = [player sendParameters:@[ param ]
                                         atTime:CHHapticTimeImmediate error:&error];
+    g_haptic_phase.store(0, std::memory_order_release);
               rumble_trace(ok && !error ? "UPDATE_OK" : "UPDATE_FAILED",
                            player, generation, intensity);
               if (ok && !error) return;
@@ -838,8 +881,12 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       player.loopEnabled = YES;
       player.loopEnd = kRumbleDuration;
       error = nil;
+    g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
+    g_haptic_generation.store(generation, std::memory_order_relaxed);
+    g_haptic_phase.store(3, std::memory_order_release);
       rumble_trace("START_BEGIN", player, generation, intensity);
       BOOL ok = [player startAtTime:CHHapticTimeImmediate error:&error];
+    g_haptic_phase.store(0, std::memory_order_release);
       rumble_trace(ok && !error ? "START_OK" : "START_FAILED", player, generation, intensity);
       if (ok && !error) {
           g_rumble_player = player;
