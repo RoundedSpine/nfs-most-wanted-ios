@@ -58,6 +58,14 @@ int g_crash_fd = -1;
 std::atomic<uintptr_t> g_haptic_receiver{0};
 std::atomic<uint64_t> g_haptic_generation{0};
 std::atomic<unsigned int> g_haptic_phase{0}; // 1 stop, 2 update, 3 start
+std::atomic<uint64_t> g_haptic_operation_serial{0};
+std::atomic<uint64_t> g_haptic_engine_epoch_snapshot{0};
+std::atomic<uintptr_t> g_haptic_engine_pointer{0};
+std::atomic<uint64_t> g_haptic_main_thread{0};
+std::atomic<uint64_t> g_haptic_stop_begin_ns{0};
+std::atomic<uint64_t> g_haptic_last_start_ns{0};
+std::atomic<uint64_t> g_haptic_last_stop_ns{0};
+
 void crash_hex(const char *label, uintptr_t value) {
     if (g_crash_fd < 0) return;
     size_t n = 0;
@@ -107,6 +115,14 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
         crash_hex("haptic phase=0x", g_haptic_phase.load(std::memory_order_relaxed));
         crash_hex(" receiver=0x", g_haptic_receiver.load(std::memory_order_relaxed));
         crash_hex(" generation=0x", g_haptic_generation.load(std::memory_order_relaxed));
+        crash_hex(" operation_serial=0x", g_haptic_operation_serial.load(std::memory_order_relaxed));
+        crash_hex(" engine_epoch=0x", g_haptic_engine_epoch_snapshot.load(std::memory_order_relaxed));
+        crash_hex(" engine_ptr=0x", g_haptic_engine_pointer.load(std::memory_order_relaxed));
+        crash_hex(" main_thread=0x", g_haptic_main_thread.load(std::memory_order_relaxed));
+        crash_hex(" stop_begin_ns=0x", g_haptic_stop_begin_ns.load(std::memory_order_relaxed));
+        crash_hex(" last_start_ns=0x", g_haptic_last_start_ns.load(std::memory_order_relaxed));
+        crash_hex(" last_stop_ns=0x", g_haptic_last_stop_ns.load(std::memory_order_relaxed));
+
         crash_hex(" signal_code=0x", static_cast<uintptr_t>(info ? info->si_code : 0));
 #if defined(__aarch64__) || defined(__arm64__)
         const auto *uc = static_cast<const ucontext_t *>(context);
@@ -784,9 +800,20 @@ void stop_rumble_player() {
     g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
     g_haptic_generation.store(generation, std::memory_order_relaxed);
     g_haptic_phase.store(1, std::memory_order_release);
+    struct timespec stop_clock = {};
+    (void)clock_gettime(CLOCK_MONOTONIC, &stop_clock);
+    g_haptic_stop_begin_ns.store(uint64_t(stop_clock.tv_sec) * 1000000000ull +
+                                 uint64_t(stop_clock.tv_nsec), std::memory_order_relaxed);
+    g_haptic_operation_serial.fetch_add(1, std::memory_order_relaxed);
+    g_haptic_engine_epoch_snapshot.store(epoch, std::memory_order_relaxed);
+    g_haptic_engine_pointer.store(reinterpret_cast<uintptr_t>((__bridge void *)g_haptic_engine),
+                                  std::memory_order_relaxed);
+    g_haptic_main_thread.store([NSThread isMainThread] ? 1u : 0u, std::memory_order_relaxed);
     rumble_trace("STOP_SEND_BEGIN", player, generation);
     NSError *error = nil;
     BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
+    g_haptic_last_stop_ns.store(g_haptic_stop_begin_ns.load(std::memory_order_relaxed),
+                                std::memory_order_relaxed);
     g_haptic_phase.store(0, std::memory_order_release);
     g_haptic_receiver.store(0, std::memory_order_relaxed);
     g_haptic_generation.store(0, std::memory_order_relaxed);
@@ -997,6 +1024,12 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     g_haptic_phase.store(0, std::memory_order_release);
     g_haptic_receiver.store(0, std::memory_order_relaxed);
     g_haptic_generation.store(0, std::memory_order_relaxed);
+      if (ok && !error) {
+          struct timespec start_clock = {};
+          if (clock_gettime(CLOCK_MONOTONIC, &start_clock) == 0)
+              g_haptic_last_start_ns.store(uint64_t(start_clock.tv_sec) * 1000000000ull +
+                                            uint64_t(start_clock.tv_nsec), std::memory_order_relaxed);
+      }
       rumble_trace(ok && !error ? "START_OK" : "START_FAILED", player, generation, intensity);
       if (ok && !error &&
           startup_epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) {
