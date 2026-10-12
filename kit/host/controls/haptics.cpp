@@ -33,7 +33,7 @@ void RumbleRouter::update(uint64_t serial, uint16_t low, uint16_t high, RumbleSi
     }
     const bool on = low_ != 0 || high_ != 0;
     if (!on) {
-        if (changed && active_ != RumbleSink::None) {
+        if (active_ != RumbleSink::None) {
             // Stop only the output that was actually active.
             send(active_, 0, 0);
         }
