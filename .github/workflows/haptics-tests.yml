@@ -1,0 +1,15 @@
+name: Haptics Regression Tests
+on:
+  push:
+    branches:
+      - testing/haptics-core-repair
+  workflow_dispatch:
+jobs:
+  rumble-router:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run router tests (ASan + UBSan)
+        run: |
+          c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer kit/host/controls/haptics.cpp tests/haptics/rumble_router_test.cpp -o /tmp/rumble-router-test
+          /tmp/rumble-router-test
