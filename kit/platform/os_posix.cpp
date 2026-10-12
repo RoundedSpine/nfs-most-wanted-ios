@@ -1137,8 +1137,8 @@ static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
             image_record[image_offsets[k] + i] = digits[(image_values[k] >> (60 - 4 * i)) & 15];
     if (g_ios_image_uuid_valid)
         for (unsigned i = 0; i < 16; ++i) {
-            image_record[66 + i * 2] = digits[g_ios_image_uuid[i] >> 4];
-            image_record[67 + i * 2] = digits[g_ios_image_uuid[i] & 15];
+            image_record[67 + i * 2] = digits[g_ios_image_uuid[i] >> 4];
+            image_record[68 + i * 2] = digits[g_ios_image_uuid[i] & 15];
         }
     ios_fatal_literal(image_record, sizeof(image_record) - 1);
 #if defined(__aarch64__) || defined(__arm64__)
@@ -1224,6 +1224,14 @@ static void ios_fatal_init() {
     if (g_ios_fatal_fd >= 0) {
         static const char marker[] = "session started; absence of fatal signal does not exclude jetsam/SIGKILL\n";
         ios_fatal_literal(marker, sizeof(marker) - 1);
+        char identity[128];
+        struct timespec started{};
+        (void)clock_gettime(CLOCK_REALTIME, &started);
+        const int count = snprintf(identity, sizeof(identity),
+            "session pid=%ld epoch_sec=%lld epoch_nsec=%ld\n",
+            (long)getpid(), (long long)started.tv_sec, (long)started.tv_nsec);
+        if (count > 0 && count < (int)sizeof(identity))
+            ios_fatal_literal(identity, (size_t)count);
     }
 }
 #endif
@@ -1241,14 +1249,9 @@ int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     ios_fatal_init();
-    struct sigaction action{};
-    action.sa_sigaction = ios_fatal_signal;
-    sigemptyset(&action.sa_mask);
-    action.sa_flags = SA_SIGINFO | SA_RESETHAND;
-    sigaction(SIGSEGV, &action, nullptr);
-    sigaction(SIGBUS, &action, nullptr);
-    sigaction(SIGILL, &action, nullptr);
-    sigaction(SIGABRT, &action, nullptr);
+    // The iOS host installs the sole native fatal-signal handler, which also
+    // records Core Haptics receiver state. Do not replace that handler here.
+    // This platform layer retains the clean-exit marker only.
 #else
     signal(SIGSEGV, fault_trampoline);
     signal(SIGBUS, fault_trampoline);
