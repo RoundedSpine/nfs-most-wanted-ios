@@ -93,7 +93,7 @@ void scroll_minimap(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *in
         return;
     }
     const uint32_t camera = 0x89d1c8 + player * 0xc65;
-    const uint32_t x = uint8_t((rd16(camera + 0x24) >> 8 & 0xfe) + 128) * w / 256;
+    const uint32_t x = static_cast<uint32_t>(uint8_t((rd16(camera + 0x24) >> 8 & 0xfe) + 128)) * w / 256;
     const uint32_t y = uint8_t((rd16(camera + 0x26) >> 8 & 0xfe) + 128) * h / 256;
     // The original four-quadrant wrap, with a row stride that accommodates
     // the active minimap instead of its hard-coded 256-byte rows.
