@@ -1228,6 +1228,7 @@ static void ios_fatal_init() {
 }
 #endif
 static OsFaultFn g_fault_fn = nullptr;
+#if !(defined(__APPLE__) && TARGET_OS_IPHONE)
 static void fault_trampoline(int sig) {
     const char *what = sig == SIGSEGV   ? "SIGSEGV"
                        : sig == SIGBUS  ? "SIGBUS"
@@ -1235,6 +1236,7 @@ static void fault_trampoline(int sig) {
                                         : "a fatal signal";
     g_fault_fn(what);
 }
+#endif
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
 #if defined(__APPLE__) && TARGET_OS_IPHONE
