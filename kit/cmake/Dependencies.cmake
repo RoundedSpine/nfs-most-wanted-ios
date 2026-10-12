@@ -228,12 +228,21 @@ if(RECOMP_VIDEO)
     get_filename_component(RECOMP_FFMPEG_MSYS_BIN "${RECOMP_FFMPEG_MAKE}" DIRECTORY)
     list(APPEND RECOMP_FFMPEG_ENV --modify "PATH=path_list_prepend:${RECOMP_FFMPEG_MSYS_BIN}")
   endif()
+  # iOS FFmpeg 7.1.1 generates a deprecated Darwin linker flag.
+  # Keep the workaround isolated to the iOS build and preserve other flags.
+  if(IOS)
+    set(RECOMP_FFMPEG_LINKFLAG_FIX
+      ${CMAKE_COMMAND} -DFFMPEG_CONFIG_MAK=<BINARY_DIR>/ffbuild/config.mak
+      -P ${CMAKE_CURRENT_LIST_DIR}/RemoveObsoleteFfmpegLinkFlag.cmake)
+  else()
+    set(RECOMP_FFMPEG_LINKFLAG_FIX ${CMAKE_COMMAND} -E true)
+  endif()
   ExternalProject_Add(ffmpeg
     URL https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
     URL_HASH SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     CONFIGURE_COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_SHELL} <SOURCE_DIR>/configure ${RECOMP_FFMPEG_CONFIGURE}
-    BUILD_COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_MAKE} -j8
+    BUILD_COMMAND ${RECOMP_FFMPEG_LINKFLAG_FIX} COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_MAKE} -j8
     INSTALL_COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_MAKE} install
     BUILD_BYPRODUCTS ${RECOMP_FFMPEG_LIBRARIES} ${RECOMP_FFMPEG_IMPLIBRARIES})
   if(WIN32)
