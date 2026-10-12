@@ -266,6 +266,7 @@ void host_stats_reset(void);
 #ifdef __cplusplus
 extern "C" {
 #endif
+void host_display_begin_shutdown(void);
 void host_present_stop(void); // only after the guest scheduler has stopped
 // While suspended the worker still composes and completes frames but acquires
 // no drawable and presents nothing: what an iOS app must do in the background.
