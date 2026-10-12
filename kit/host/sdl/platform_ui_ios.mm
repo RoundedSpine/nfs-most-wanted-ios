@@ -736,6 +736,7 @@ UIImpactFeedbackGenerator *g_tap_generator;
 CHHapticEngine *g_haptic_engine;
 id<CHHapticAdvancedPatternPlayer> g_rumble_player;
 bool g_rumble_active = false;
+bool g_rumble_silent = false; // main-queue-owned state
 // Serialized on the main queue; generations identify distinct player lifetimes.
 uint64_t g_rumble_generation = 0;
 uint64_t g_rumble_next_generation = 0;
@@ -791,6 +792,7 @@ void forget_rumble_player(const char *reason = "forget") {
     g_haptic_receiver.store(0, std::memory_order_relaxed);
     g_haptic_generation.store(0, std::memory_order_relaxed);
     g_rumble_active = false;
+    g_rumble_silent = false;
     g_rumble_generation = 0;
     g_rumble_player_engine_epoch = 0;
     rumble_trace("RELEASE_DONE", nil, 0, -1, reason);
@@ -905,6 +907,9 @@ void platform_ui_haptic_tap() {
 #ifndef NFSMW_DISABLE_DEVICE_CORE_HAPTICS
 #define NFSMW_DISABLE_DEVICE_CORE_HAPTICS 0
 #endif
+#ifndef NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
+#define NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP 1
+#endif
 
 namespace {
 void rumble_process_latest() {
@@ -947,11 +952,19 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           return;
       ios_capture_loaded_images("before_core_haptics");
       rumble_trace("REQUEST", g_rumble_player, g_rumble_generation, intensity);
+#if !NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
       if (intensity <= 0.0f) {
           if (g_rumble_player)
               stop_rumble_player();
           return;
       }
+#else
+      if (intensity <= 0.0f && !g_rumble_player) return;
+      if (intensity <= 0.0f && g_rumble_silent &&
+          g_rumble_player_engine_epoch ==
+              g_rumble_engine_notifications.load(std::memory_order_acquire))
+          return;
+#endif
 
       NSError *error = nil;
       if (g_rumble_player) {
@@ -969,25 +982,37 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
     g_haptic_generation.store(generation, std::memory_order_relaxed);
     g_haptic_phase.store(2, std::memory_order_release);
-              rumble_trace("UPDATE_SEND_BEGIN", player, generation, intensity);
+              rumble_trace(intensity <= 0.0f ? "SILENCE_SEND_BEGIN" : "UPDATE_SEND_BEGIN",
+                           player, generation, intensity);
               BOOL ok = [player sendParameters:@[ param ]
                                         atTime:CHHapticTimeImmediate error:&error];
     g_haptic_phase.store(0, std::memory_order_release);
     g_haptic_receiver.store(0, std::memory_order_relaxed);
     g_haptic_generation.store(0, std::memory_order_relaxed);
-              rumble_trace(ok && !error ? "UPDATE_OK" : "UPDATE_FAILED",
+              rumble_trace(ok && !error
+                               ? (intensity <= 0.0f ? "SILENCE_OK" : "UPDATE_OK")
+                               : (intensity <= 0.0f ? "SILENCE_FAILED" : "UPDATE_FAILED"),
                            player, generation, intensity);
               if (ok && !error &&
-                  epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) return;
+                  epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) {
+                  g_rumble_silent = intensity <= 0.0f;
+                  return;
+              }
               ++g_rumble_update_failures;
-              // Attempt to stop a still-live player before replacing it.
-              // Keep the local strong reference through cleanup.
+#if NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
+              forget_rumble_player("parameter update failed");
+              if (intensity <= 0.0f) return;
+#else
               stop_rumble_player();
+#endif
           } else {
               forget_rumble_player("inactive player");
           }
       }
 
+#if NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
+      if (intensity <= 0.0f) return; // do not create a player for silence
+#endif
       CHHapticEngine *engine = haptic_engine();
       if (!engine)
           return;
@@ -1069,6 +1094,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           g_rumble_generation = generation;
           g_rumble_player_engine_epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
           g_rumble_active = true;
+          g_rumble_silent = false;
           rumble_trace("RETAINED", g_rumble_player, generation, intensity);
       } else {
           g_rumble_engine_running = false;
