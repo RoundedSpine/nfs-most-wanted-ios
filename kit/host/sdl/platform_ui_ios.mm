@@ -727,12 +727,13 @@ void platform_ui_process_exit(int code) {
 }
 
 // ---------------------------------------------------------------------------
-// Haptics: a light impact tick for on-screen control presses, and a Core
-// Haptics continuous player standing in for game rumble on a device with no
-// controller. Both must run on the main thread.
+// Haptics: UIKit impacts for on-screen controls and (by default) gameplay
+// rumble. The legacy continuous Core Haptics player remains for A/B testing.
+// UIKit objects are accessed only on the main queue.
 // ---------------------------------------------------------------------------
 namespace {
 UIImpactFeedbackGenerator *g_tap_generator;
+UIImpactFeedbackGenerator *g_rumble_impact_generator; // main-queue owned
 CHHapticEngine *g_haptic_engine;
 id<CHHapticAdvancedPatternPlayer> g_rumble_player;
 bool g_rumble_active = false;
@@ -907,8 +908,8 @@ void platform_ui_haptic_tap() {
     });
 }
 
-// CI may build a diagnostic IPA with device Core Haptics disabled.
-// Keep controller rumble, UI tap feedback, and the crash monitor unchanged.
+// Diagnostic switch disables gameplay device haptics (UIKit or Core Haptics).
+// Controller rumble, UI tap feedback, and crash monitoring are unchanged.
 #ifndef NFSMW_DISABLE_DEVICE_CORE_HAPTICS
 #define NFSMW_DISABLE_DEVICE_CORE_HAPTICS 0
 #endif
@@ -942,9 +943,9 @@ void rumble_process_latest() {
 
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #if NFSMW_USE_UIKIT_RUMBLE && !NFSMW_DISABLE_DEVICE_CORE_HAPTICS
-    // UIKit's impact generator provides discrete pulses, not continuous rumble.
-    // Throttle the game-thread requests before dispatching to the main queue;
-    // never construct or message a CHHapticAdvancedPatternPlayer in this mode.
+    // UIKit impacts are discrete rather than continuous rumble.
+    // Rate-limit requests before dispatch; UIKit remains main-queue owned.
+    // This path never messages a CHHapticAdvancedPatternPlayer.
     const uint16_t strength = std::max(low, high);
     if (!strength) return;
     constexpr uint64_t kMinPulseIntervalNs = 150000000ull; // <= ~6.7 Hz
@@ -961,12 +962,10 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
             const CGFloat intensity = std::max<CGFloat>(
                 0.15, CGFloat(strength) / 65535.0);
             dispatch_async(dispatch_get_main_queue(), ^{
-                static UIImpactFeedbackGenerator *generator = nil;
-                if (!generator)
-                    generator = [[UIImpactFeedbackGenerator alloc]
+                if (!g_rumble_impact_generator)
+                    g_rumble_impact_generator = [[UIImpactFeedbackGenerator alloc]
                         initWithStyle:UIImpactFeedbackStyleMedium];
-                [generator impactOccurredWithIntensity:intensity];
-                ios_diagnostic("rumble UIKit impact dispatched");
+                [g_rumble_impact_generator impactOccurredWithIntensity:intensity];
             });
             break;
         }
@@ -1164,5 +1163,5 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       again = g_rumble_scheduler.next(request);
       } while (again);
     });
-#endif // NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+#endif // gameplay device haptics
 }
