@@ -794,7 +794,18 @@ void platform_ui_haptic_tap() {
     });
 }
 
+// CI may build a diagnostic IPA with device Core Haptics disabled.
+// Keep controller rumble, UI tap feedback, and the crash monitor unchanged.
+#ifndef NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+#define NFSMW_DISABLE_DEVICE_CORE_HAPTICS 0
+#endif
+
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
+#if NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+    (void)low;
+    (void)high;
+    return;
+#else
     const float intensity = std::max(low, high) / 65535.0f;
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!device_supports_haptics())
@@ -899,4 +910,5 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
                   error ? error.localizedDescription.UTF8String : "unknown error");
       }
     });
+#endif // NFSMW_DISABLE_DEVICE_CORE_HAPTICS
 }
