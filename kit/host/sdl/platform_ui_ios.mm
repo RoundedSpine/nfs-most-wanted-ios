@@ -65,6 +65,9 @@ std::atomic<uint64_t> g_haptic_main_thread{0};
 std::atomic<uint64_t> g_haptic_stop_begin_ns{0};
 std::atomic<uint64_t> g_haptic_last_start_ns{0};
 std::atomic<uint64_t> g_haptic_last_stop_ns{0};
+std::atomic<uintptr_t> g_haptic_stop_selector{0};
+std::atomic<uint64_t> g_haptic_stop_thread_id{0};
+std::atomic<uintptr_t> g_haptic_stop_player_at_entry{0};
 
 void crash_hex(const char *label, uintptr_t value) {
     if (g_crash_fd < 0) return;
@@ -122,6 +125,9 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
         crash_hex(" stop_begin_ns=0x", g_haptic_stop_begin_ns.load(std::memory_order_relaxed));
         crash_hex(" last_start_ns=0x", g_haptic_last_start_ns.load(std::memory_order_relaxed));
         crash_hex(" last_stop_ns=0x", g_haptic_last_stop_ns.load(std::memory_order_relaxed));
+        crash_hex(" stop_selector=0x", g_haptic_stop_selector.load(std::memory_order_relaxed));
+        crash_hex(" stop_thread_id=0x", g_haptic_stop_thread_id.load(std::memory_order_relaxed));
+        crash_hex(" stop_player_at_entry=0x", g_haptic_stop_player_at_entry.load(std::memory_order_relaxed));
 
         crash_hex(" signal_code=0x", static_cast<uintptr_t>(info ? info->si_code : 0));
 #if defined(__aarch64__) || defined(__arm64__)
@@ -139,6 +145,14 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
             crash_hex(" x21=0x", state.__x[21]);
             crash_hex(" fp=0x", state.__fp);
             crash_hex(" sp=0x", state.__sp);
+            crash_hex(" cpsr=0x", state.__cpsr);
+            crash_hex(" x22=0x", state.__x[22]);
+            crash_hex(" x23=0x", state.__x[23]);
+            crash_hex(" x24=0x", state.__x[24]);
+            crash_hex(" x25=0x", state.__x[25]);
+            crash_hex(" x26=0x", state.__x[26]);
+            crash_hex(" x27=0x", state.__x[27]);
+            crash_hex(" x28=0x", state.__x[28]);
             for (unsigned int reg = 3; reg <= 18; ++reg) {
                 static const char *labels[] = {" x3=0x", " x4=0x", " x5=0x", " x6=0x", " x7=0x", " x8=0x", " x9=0x", " x10=0x", " x11=0x", " x12=0x", " x13=0x", " x14=0x", " x15=0x", " x16=0x", " x17=0x", " x18=0x"};
                 crash_hex(labels[reg - 3], state.__x[reg]);
@@ -809,6 +823,15 @@ void stop_rumble_player() {
     g_haptic_engine_pointer.store(reinterpret_cast<uintptr_t>((__bridge void *)g_haptic_engine),
                                   std::memory_order_relaxed);
     g_haptic_main_thread.store([NSThread isMainThread] ? 1u : 0u, std::memory_order_relaxed);
+    // Pre-dispatch evidence: no player dereference, no Objective-C validation
+    // message, and no unsafe memory reads from the signal handler.
+    uint64_t stop_tid = 0;
+    (void)pthread_threadid_np(nullptr, &stop_tid);
+    g_haptic_stop_thread_id.store(stop_tid, std::memory_order_relaxed);
+    g_haptic_stop_selector.store(reinterpret_cast<uintptr_t>(@selector(stopAtTime:error:)),
+                                 std::memory_order_relaxed);
+    g_haptic_stop_player_at_entry.store(reinterpret_cast<uintptr_t>((__bridge void *)player),
+                                        std::memory_order_relaxed);
     rumble_trace("STOP_SEND_BEGIN", player, generation);
     NSError *error = nil;
     BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
