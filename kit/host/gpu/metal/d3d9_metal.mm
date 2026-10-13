@@ -874,6 +874,7 @@ class Renderer final : public D9Backend {
         (void)vd;
         zero_ = [mtl_ newBufferWithLength:64 options:MTLResourceStorageModeShared];
         memset(zero_.contents, 0, 64);
+#if !defined(NFSMW_PERFORMANCE_BUILD) || !NFSMW_PERFORMANCE_BUILD
         const char *trace = recomp_env("D3D9_TRACE");
         if (trace && !strcmp(trace, "1")) {
             capture_mode_ = recomp_env("D3D9_CAPTURE_SESSION") != nullptr;
@@ -893,6 +894,7 @@ class Renderer final : public D9Backend {
                         "events, 2Hz full samples, 6s post, 3 captures; buffers=%zu bytes\n",
                         trace_->allocated_bytes() * 2);
         }
+#endif
     }
 
     ~Renderer() override {
