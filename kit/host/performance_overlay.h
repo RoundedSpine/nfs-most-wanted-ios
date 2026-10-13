@@ -12,6 +12,9 @@
 class PerformanceOverlay {
   public:
     ~PerformanceOverlay();
+    // Release borrowed-device resources before the GPU device is destroyed.
+    // Safe to call repeatedly, including after a presenter restart.
+    void shutdown();
     // Blend the overlay onto `target` (drawable pixels `w` x `h`) inside `cb`.
     // `mode` 0 draws nothing, 1 the counters, 2 the counters and the graph.
     void draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h,
