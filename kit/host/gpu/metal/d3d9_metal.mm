@@ -1,3 +1,6 @@
+#ifndef NFSMW_PERFORMANCE_BUILD
+#define NFSMW_PERFORMANCE_BUILD 0
+#endif
 // d3d9_metal.mm - the Direct3D 9 device's renderer on Metal: a D9Backend
 // (host/gpu/d3d9_backend.h), driven by host/gpu/d3d9_host.cpp. It is
 // Objective-C++, so the hosts compile it into their present sources.
@@ -877,7 +880,7 @@ class Renderer final : public D9Backend {
         if (zero_ && zero_.contents)
             memset(zero_.contents, 0, 64);
         const char *trace = recomp_env("D3D9_TRACE");
-        if (trace && !strcmp(trace, "1")) {
+        if (!NFSMW_PERFORMANCE_BUILD && trace && !strcmp(trace, "1")) {
             capture_mode_ = recomp_env("D3D9_CAPTURE_SESSION") != nullptr;
             if (capture_mode_) {
                 trace_ = capture_ring();
