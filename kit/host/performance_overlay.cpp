@@ -38,8 +38,19 @@ struct Canvas {
 } // namespace
 
 PerformanceOverlay::~PerformanceOverlay() {
+    shutdown();
+}
+
+void PerformanceOverlay::shutdown() {
     if (device_ && texture_)
         device_->destroy(texture_);
+    texture_ = {};
+    device_ = nullptr;
+    texture_h_ = 0;
+    refreshed_ = -1;
+    last_mode_ = 0;
+    last_render_ = 0;
+    pixels_.clear();
 }
 
 // Rasterize a pacing snapshot into the overlay texture. The graph uses a fixed
