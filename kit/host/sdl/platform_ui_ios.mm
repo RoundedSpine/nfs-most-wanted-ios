@@ -53,19 +53,6 @@ void ios_diagnostic(const char *event);
 std::atomic<bool> g_crash_monitor_started{false};
 std::atomic<unsigned long long> g_peak_footprint{0};
 int g_crash_fd = -1;
-std::atomic<uintptr_t> g_haptic_receiver{0};
-std::atomic<uint64_t> g_haptic_generation{0};
-std::atomic<unsigned int> g_haptic_phase{0}; // 1 stop, 2 update, 3 start
-std::atomic<uint64_t> g_haptic_operation_serial{0};
-std::atomic<uint64_t> g_haptic_engine_epoch_snapshot{0};
-std::atomic<uintptr_t> g_haptic_engine_pointer{0};
-std::atomic<uint64_t> g_haptic_main_thread{0};
-std::atomic<uint64_t> g_haptic_stop_begin_ns{0};
-std::atomic<uint64_t> g_haptic_last_start_ns{0};
-std::atomic<uint64_t> g_haptic_last_stop_ns{0};
-std::atomic<uintptr_t> g_haptic_stop_selector{0};
-std::atomic<uint64_t> g_haptic_stop_thread_id{0};
-std::atomic<uintptr_t> g_haptic_stop_player_at_entry{0};
 
 void crash_hex(const char *label, uintptr_t value) {
     if (g_crash_fd < 0) return;
@@ -113,20 +100,6 @@ void ios_fatal_signal(int signo, siginfo_t *info, void *context) {
         }
         (void)write(g_crash_fd, hex, sizeof(hex));
         (void)write(g_crash_fd, suffix, sizeof(suffix) - 1);
-        crash_hex("haptic phase=0x", g_haptic_phase.load(std::memory_order_relaxed));
-        crash_hex(" receiver=0x", g_haptic_receiver.load(std::memory_order_relaxed));
-        crash_hex(" generation=0x", g_haptic_generation.load(std::memory_order_relaxed));
-        crash_hex(" operation_serial=0x", g_haptic_operation_serial.load(std::memory_order_relaxed));
-        crash_hex(" engine_epoch=0x", g_haptic_engine_epoch_snapshot.load(std::memory_order_relaxed));
-        crash_hex(" engine_ptr=0x", g_haptic_engine_pointer.load(std::memory_order_relaxed));
-        crash_hex(" main_thread=0x", g_haptic_main_thread.load(std::memory_order_relaxed));
-        crash_hex(" stop_begin_ns=0x", g_haptic_stop_begin_ns.load(std::memory_order_relaxed));
-        crash_hex(" last_start_ns=0x", g_haptic_last_start_ns.load(std::memory_order_relaxed));
-        crash_hex(" last_stop_ns=0x", g_haptic_last_stop_ns.load(std::memory_order_relaxed));
-        crash_hex(" stop_selector=0x", g_haptic_stop_selector.load(std::memory_order_relaxed));
-        crash_hex(" stop_thread_id=0x", g_haptic_stop_thread_id.load(std::memory_order_relaxed));
-        crash_hex(" stop_player_at_entry=0x", g_haptic_stop_player_at_entry.load(std::memory_order_relaxed));
-
         crash_hex(" signal_code=0x", static_cast<uintptr_t>(info ? info->si_code : 0));
 #if defined(__aarch64__) || defined(__arm64__)
         const auto *uc = static_cast<const ucontext_t *>(context);
