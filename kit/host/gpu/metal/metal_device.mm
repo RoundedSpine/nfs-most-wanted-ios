@@ -1,3 +1,6 @@
+#ifndef NFSMW_PERFORMANCE_BUILD
+#define NFSMW_PERFORMANCE_BUILD 0
+#endif
 #include "metal_device.h"
 
 #include "shaders_msl.h"
@@ -186,7 +189,7 @@ std::unique_ptr<Device> metal_create_device() {
 
 MetalDevice::MetalDevice(id<MTLDevice> device) : device_(device), queue_([device newCommandQueue]) {
     const char *diagnostics = recomp_env("METAL_DIAGNOSTICS");
-    diagnostics_ = diagnostics && !strcmp(diagnostics, "1");
+    diagnostics_ = !NFSMW_PERFORMANCE_BUILD && diagnostics && !strcmp(diagnostics, "1");
     if (diagnostics_)
         fprintf(stderr,
                 "[gpu/metal] bounded command diagnostics enabled; not a performance baseline\n");
