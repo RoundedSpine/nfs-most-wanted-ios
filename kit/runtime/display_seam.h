@@ -83,7 +83,8 @@ int host_gpu2d_available(void);
 uint32_t host_gpu2d_generation(void);
 // Replace the (x, y, rw, rh) region of texture `id`, a w x h RGBA8 image,
 // with `rgba` (rw * rh pixels, tightly packed). Creates or resizes it first.
-void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba, int x, int y, int rw,
+// Returns 1 only when allocation and upload succeed; 0 otherwise.
+int host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba, int x, int y, int rw,
                         int rh);
 void host_gpu2d_forget(uint32_t id);
 void host_gpu2d_reset(void);
