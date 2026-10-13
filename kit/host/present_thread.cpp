@@ -1,3 +1,6 @@
+#ifndef NFSMW_PERFORMANCE_BUILD
+#define NFSMW_PERFORMANCE_BUILD 0
+#endif
 #include "page_overlay.h"
 #include "../runtime/display_seam.h"
 // Worker-owned swapchain and sealed-frame mailbox, over gpu.h. No window code here.
@@ -1133,6 +1136,7 @@ std::shared_ptr<Service> begin(bool fake, bool automatic, bool offscreen) {
     }
     if (const char *mode = recomp_env("HOST_PRESENT_PACING"))
         s->duration_pacing = strcmp(mode, "immediate") != 0;
+#if !NFSMW_PERFORMANCE_BUILD
     if (!fake)
         if (const char *path = recomp_env("PRESENT_ACK_TRACE")) {
             s->ack_trace = fopen(path, "w");
@@ -1159,6 +1163,7 @@ std::shared_ptr<Service> begin(bool fake, bool automatic, bool offscreen) {
             } else
                 fprintf(stderr, "presenter: cannot open frame timings %s\n", path);
         }
+#endif
     active.store(s);
     if (!fake)
         ddraw_set_present_callbacks(host_present_first_write, host_frame_seal);
