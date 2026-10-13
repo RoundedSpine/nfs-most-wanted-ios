@@ -368,7 +368,9 @@ bool host_sync(Object &o, bool packed) {
     std::vector<uint8_t> rgba;
     if (!to_rgba(o, packed, x, y, w, h, rgba))
         return false;
-    host_gpu2d_texture(o.id, int(o.texture.Width), int(o.texture.Height), rgba.data(), x, y, w, h);
+    if (!host_gpu2d_texture(o.id, int(o.texture.Width), int(o.texture.Height),
+                            rgba.data(), x, y, w, h))
+        return false;
     host_matches(o);
     o.host_decode = decode;
     return true;
