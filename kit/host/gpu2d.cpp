@@ -105,25 +105,34 @@ void settle(gpu::Device *d) {
 Surface *surface(gpu::Device *d, uint32_t id, int w, int h) {
     if (w <= 0 || h <= 0)
         return nullptr;
-    Surface &t = state().surfaces[id];
-    if (t.texture && (t.w != w || t.h != h)) {
-        settle(d);
-        d->destroy(t.texture);
-        t = {};
+    auto &surfaces = state().surfaces;
+    auto it = surfaces.find(id);
+    if (it != surfaces.end() && it->second.texture &&
+        it->second.w == w && it->second.h == h)
+        return &it->second;
+
+    // Allocate before releasing the old surface. A failed resize must leave
+    // the original GPU texture and its dimensions intact.
+    gpu::Texture replacement = d->create_texture(
+        {w, h, gpu::Format::RGBA8,
+         gpu::UsageSampled | gpu::UsageRenderTarget | gpu::UsageCpu, 1});
+    if (!replacement) {
+        fprintf(stderr, "gpu2d: texture allocation failed (%dx%d)\n", w, h);
+        return nullptr;
     }
-    if (!t.texture) {
-        t.texture =
-            d->create_texture({w, h, gpu::Format::RGBA8,
-                               gpu::UsageSampled | gpu::UsageRenderTarget | gpu::UsageCpu, 1});
-        if (!t.texture) {
-            fprintf(stderr, "gpu2d: texture allocation failed (%dx%d)\n", w, h);
-            state().surfaces.erase(id);
-            return nullptr;
+
+    if (it != surfaces.end()) {
+        if (it->second.texture) {
+            // End any pass and wait for commands that still reference the old
+            // resource before destroying it.
+            settle(d);
+            d->destroy(it->second.texture);
         }
-        t.w = w;
-        t.h = h;
+        it->second = {replacement, w, h};
+        return &it->second;
     }
-    return &t;
+    auto inserted = surfaces.emplace(id, Surface{replacement, w, h});
+    return &inserted.first->second;
 }
 
 // Open a pass on `target`, loading what is there or clearing it.
@@ -226,6 +235,10 @@ extern "C" int host_gpu2d_draw(uint32_t target, int w, int h, uint32_t texture,
         return 0;
     auto source = state().surfaces.find(texture);
     if (source == state().surfaces.end())
+        return 0;
+    // A resize would destroy the sampled source handle. Reject this draw
+    // before changing either surface; same-size feedback is also unsupported.
+    if (texture == target)
         return 0;
     const gpu::Texture src = source->second.texture;
     Surface *t = surface(d, target, w, h);
