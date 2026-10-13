@@ -60,6 +60,6 @@ void platform_ui_haptic_tap();
 // The device's own motor, standing in for game rumble when no controller is
 // connected. `low`/`high` are the guest's low/high-frequency motor strengths
 // (0..65535, as SDL_GetGamepadRumble takes them); 0,0 stops the motor.
-// iOS: a Core Haptics continuous player, intensity max(low, high)/65535.
+// iOS: rate-limited UIKit impact pulses, intensity max(low, high)/65535.\n// A zero request schedules no new impact; there is no continuous player to stop.
 // Android: Vibrator.vibrate with an amplitude derived the same way. Desktop: no-op.
 void platform_ui_device_rumble(uint16_t low, uint16_t high);
