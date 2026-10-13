@@ -187,9 +187,9 @@ extern "C" int host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba
         x < 0 || y < 0 || x > w || y > h || rw > w - x || rh > h - y)
         return 0;
     int pitch = 0;
-    if (!checked_rgba8_pitch(rw, pitch)) return;
+    if (!checked_rgba8_pitch(rw, pitch)) return 0;
     Surface *t = surface(d, id, w, h);
-    if (!t) return;
+    if (!t) return 0;
     settle(d);
     if (!d->upload(t->texture, {x, y, rw, rh}, rgba, pitch)) {
         fprintf(stderr, "gpu2d: texture upload failed (%dx%d)\n", rw, rh);
