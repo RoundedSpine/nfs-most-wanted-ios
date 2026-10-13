@@ -173,6 +173,10 @@ void ios_uncaught_exception(NSException *exception) {
     [message writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
+#ifndef NFSMW_PERFORMANCE_BUILD
+#define NFSMW_PERFORMANCE_BUILD 0
+#endif
+
 void ios_start_crash_monitor() {
     if (g_crash_monitor_started.exchange(true)) return;
     @autoreleasepool {
@@ -198,6 +202,7 @@ void ios_start_crash_monitor() {
         action.sa_flags = SA_SIGINFO;
         sigaction(signo, &action, nullptr);
     }
+#if !NFSMW_PERFORMANCE_BUILD
     std::thread([] {
         while (true) {
             task_vm_info_data_t vm = {};
@@ -222,6 +227,7 @@ void ios_start_crash_monitor() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }).detach();
+#endif
 }
 
 
@@ -356,7 +362,9 @@ void platform_ui_init_hints() {
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
     ios_start_crash_monitor();
     ios_diagnostic("platform init; diagnostics v4 loaded image mapping footprint peak available memory_warning interval=1s");
+#if !NFSMW_PERFORMANCE_BUILD
     ios_capture_loaded_images("startup");
+#endif
 }
 
 // Documents/game when it is ready. Anything else - no game yet, a bundled copy
