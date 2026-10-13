@@ -20,7 +20,7 @@ void report_transfer_failure(const char *operation, id<MTLCommandBuffer> buffer)
     static std::atomic<unsigned> reports{0};
     if (reports.fetch_add(1, std::memory_order_relaxed) >= 16) return;
     NSError *error = buffer.error;
-    fprintf(stderr, "[gpu/metal] %s failed: status=%lu error=%s\\n",
+    fprintf(stderr, "[gpu/metal] %s failed: status=%lu error=%s\n",
             operation, (unsigned long)buffer.status,
             error ? error.localizedDescription.UTF8String : "no error object");
 }
