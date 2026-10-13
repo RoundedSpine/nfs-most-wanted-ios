@@ -237,6 +237,44 @@ jobs:
               esac
             done < "$OUT/linker/ffmpeg-objects.txt"
           fi
+          # Retain full generated link recipes for FFmpeg and the final iOS app.
+          # These are build metadata, not game assets or executable binaries.
+          find "$ROOT" -type f \( -name 'link.txt' -o -name 'config.mak' \) -print 2>/dev/null |
+          while IFS= read -r f; do
+            case "$f" in
+              */ffmpeg/*|*/CMakeFiles/recomp_app.dir/*)
+                dest="$OUT/linker/recipe_$(echo "$f" | sed 's#[/ ]#_#g')"
+                cp "$f" "$dest" 2>/dev/null || true ;;
+            esac
+          done
+          find "$ROOT" -type f -name project.pbxproj -print 2>/dev/null |
+          while IFS= read -r f; do
+            grep -n -C 3 -E 'OTHER_LDFLAGS|OTHER_LIBTOOLFLAGS|LIBRARY_SEARCH_PATHS|recomp_app|libobjc|\\-lobjc' "$f" |
+              head -n 1500 >> "$OUT/linker/xcode-link-settings.txt" || true
+          done
+
+          # Scan ALL generated Mach-O object files, not just FFmpeg.
+          # A 32 KiB common symbol is reported as 'alignment 2^15' by nm -m.
+          # Capture all common entries and a targeted high-alignment index.
+          find "$ROOT" -type f -name '*.o' -print 2>/dev/null > "$OUT/linker/all-object-paths.txt" || true
+          : > "$OUT/linker/all-common-symbols.txt"
+          : > "$OUT/linker/high-alignment-symbols.txt"
+          if command -v xcrun >/dev/null; then
+            while IFS= read -r f; do
+              matches="$(xcrun nm -m "$f" 2>/dev/null | grep -Ei 'common|align' || true)"
+              if [ -n "$matches" ]; then
+                printf '%s\\n' "$matches" | sed "s#^#$f: #" >> "$OUT/linker/all-common-symbols.txt"
+                printf '%s\\n' "$matches" | grep -Ei 'alignment 2\\^(1[5-9]|[2-9][0-9])|align(ment)?[ =:]+(32768|65536|131072)' |
+                  sed "s#^#$f: #" >> "$OUT/linker/high-alignment-symbols.txt" || true
+              fi
+            done < "$OUT/linker/all-object-paths.txt"
+            find "$ROOT" -type f -name 'SpeedRecomp' -print 2>/dev/null |
+            while IFS= read -r f; do
+              xcrun nm -m "$f" 2>/dev/null | grep -Ei 'common|align' |
+                head -n 1000 >> "$OUT/linker/final-executable-common-symbols.txt" || true
+            done
+          fi
+          wc -l "$OUT/linker/"*symbols.txt "$OUT/linker/all-object-paths.txt" > "$OUT/linker/inventory-counts.txt" 2>/dev/null || true
           find "$ROOT" -type f \( -name '*.resp' -o -name 'project.pbxproj' \) -path '*sdl3*' -print 2>/dev/null > "$OUT/sdl3/generated-files.txt" || true
           find "$ROOT" -type f -name '*.resp' -path '*SDL3-static*' -print 2>/dev/null |
           while IFS= read -r f; do
