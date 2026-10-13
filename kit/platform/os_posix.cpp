@@ -1,3 +1,6 @@
+#ifndef NFSMW_PERFORMANCE_BUILD
+#define NFSMW_PERFORMANCE_BUILD 0
+#endif
 // os_posix.cpp - the platform layer on macOS and Linux. The only file above
 // third_party/ that may include a POSIX or Mach header besides os_win32.cpp.
 #include "os.h"
@@ -990,7 +993,7 @@ static int native_flags(int flags) {
         f |= O_TRUNC;
     return f;
 }
-#if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IPHONE && !NFSMW_PERFORMANCE_BUILD
 static std::atomic<unsigned long long> g_ios_file_op{0};
 // Detailed per-operation tracing is opt-in to avoid perturbing world streaming.
 static bool ios_file_trace_enabled() {
