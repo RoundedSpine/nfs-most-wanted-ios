@@ -1380,6 +1380,7 @@ extern "C" void host_present_stop() {
         s->targets = {};
         // All GPU submissions have drained; release overlay textures before
         // the device can be torn down or this stopped Service is replaced.
+        s->performance_overlay.shutdown();
         s->controls_overlay.shutdown();
         if (s->device && s->chain) {
             s->device->destroy(s->chain);
