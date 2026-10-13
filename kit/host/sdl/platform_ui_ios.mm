@@ -51,10 +51,22 @@ std::mutex g_diag_mutex;
 void ios_diagnostic(const char *event);
 
 std::atomic<bool> g_crash_monitor_started{false};
-// Set before suspension/termination; checked again when queued UIKit work executes.
-std::atomic<bool> g_uikit_haptics_active{true};
-std::atomic<bool> g_uikit_haptics_terminating{false};
-std::atomic<uint64_t> g_uikit_haptics_generation{1};
+enum class HapticsState : uint64_t { Active = 0, Suspended = 1, Terminating = 2 };
+constexpr uint64_t kHapticsStateMask = 3;
+std::atomic<uint64_t> g_uikit_haptics_lifecycle{4};
+bool haptics_active(uint64_t token) {
+    return (token & kHapticsStateMask) == uint64_t(HapticsState::Active) &&
+           g_uikit_haptics_lifecycle.load(std::memory_order_acquire) == token;
+}
+void haptics_transition(HapticsState next) {
+    uint64_t current = g_uikit_haptics_lifecycle.load(std::memory_order_acquire);
+    for (;;) {
+        if ((current & kHapticsStateMask) == uint64_t(HapticsState::Terminating)) return;
+        const uint64_t desired = ((current & ~kHapticsStateMask) + 4) | uint64_t(next);
+        if (g_uikit_haptics_lifecycle.compare_exchange_weak(
+                current, desired, std::memory_order_acq_rel, std::memory_order_acquire)) return;
+    }
+}
 std::atomic<unsigned long long> g_peak_footprint{0};
 int g_crash_fd = -1;
 
@@ -642,16 +654,14 @@ SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
 bool platform_ui_handle_lifecycle(const SDL_Event &e) {
     switch (e.type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND:
-        g_uikit_haptics_generation.fetch_add(1, std::memory_order_acq_rel);
-        g_uikit_haptics_active.store(false, std::memory_order_release);
+        haptics_transition(HapticsState::Suspended);
         ios_diagnostic("lifecycle will enter background");
         fprintf(stderr, "[ios] will enter background: suspending presentation and audio\n");
         host_present_suspend(true);
         host_audio_pause(true);
         return true;
     case SDL_EVENT_DID_ENTER_BACKGROUND:
-        g_uikit_haptics_generation.fetch_add(1, std::memory_order_acq_rel);
-        g_uikit_haptics_active.store(false, std::memory_order_release);
+        haptics_transition(HapticsState::Suspended);
         ios_diagnostic("lifecycle did enter background");
         fprintf(stderr, "[ios] did enter background\n");
         host_present_suspend(true);
@@ -662,17 +672,14 @@ bool platform_ui_handle_lifecycle(const SDL_Event &e) {
         fprintf(stderr, "[ios] will enter foreground\n");
         return true;
     case SDL_EVENT_DID_ENTER_FOREGROUND:
-        if (!g_uikit_haptics_terminating.load(std::memory_order_acquire))
-            g_uikit_haptics_active.store(true, std::memory_order_release);
+        haptics_transition(HapticsState::Active);
         ios_diagnostic("lifecycle did enter foreground");
         fprintf(stderr, "[ios] did enter foreground: resuming audio and presentation\n");
         host_audio_pause(false);
         host_present_suspend(false);
         return true;
     case SDL_EVENT_TERMINATING:
-    g_uikit_haptics_terminating.store(true, std::memory_order_release);
-    g_uikit_haptics_generation.fetch_add(1, std::memory_order_acq_rel);
-        g_uikit_haptics_active.store(false, std::memory_order_release);
+    haptics_transition(HapticsState::Terminating);
         ios_diagnostic("lifecycle terminating");
         fprintf(stderr, "[ios] terminating\n");
         host_present_suspend(true);
@@ -700,9 +707,7 @@ int platform_ui_default_overlay() {
 }
 
 void platform_ui_process_exit(int code) {
-    g_uikit_haptics_terminating.store(true, std::memory_order_release);
-    g_uikit_haptics_generation.fetch_add(1, std::memory_order_acq_rel);
-    g_uikit_haptics_active.store(false, std::memory_order_release);
+    haptics_transition(HapticsState::Terminating);
     char exit_event[80];
     snprintf(exit_event, sizeof(exit_event), "platform process exit code=%d", code);
     ios_diagnostic(exit_event);
@@ -723,11 +728,10 @@ UIImpactFeedbackGenerator *g_rumble_impact_generator;
 } // namespace
 
 void platform_ui_haptic_tap() {
-    if (!g_uikit_haptics_active.load(std::memory_order_acquire)) return;
-    const uint64_t generation = g_uikit_haptics_generation.load(std::memory_order_acquire);
+    const uint64_t token = g_uikit_haptics_lifecycle.load(std::memory_order_acquire);
+    if (!haptics_active(token)) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (!g_uikit_haptics_active.load(std::memory_order_acquire) ||
-          generation != g_uikit_haptics_generation.load(std::memory_order_acquire)) return;
+      if (!haptics_active(token)) return;
       if (!g_tap_generator) {
           g_tap_generator =
               [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
@@ -750,8 +754,8 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #else
     // UIKit impacts are discrete rather than continuous rumble.
     // Rate-limit requests before dispatch; UIKit remains main-queue owned.
-    if (!g_uikit_haptics_active.load(std::memory_order_acquire)) return;
-    const uint64_t generation = g_uikit_haptics_generation.load(std::memory_order_acquire);
+    const uint64_t token = g_uikit_haptics_lifecycle.load(std::memory_order_acquire);
+    if (!haptics_active(token)) return;
     const uint16_t strength = std::max(low, high);
     if (!strength) return;
     constexpr uint64_t kMinPulseIntervalNs = 150000000ull; // <= ~6.7 Hz
@@ -768,8 +772,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
             const CGFloat intensity = std::max<CGFloat>(
                 0.15, CGFloat(strength) / 65535.0);
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (!g_uikit_haptics_active.load(std::memory_order_acquire) ||
-                    generation != g_uikit_haptics_generation.load(std::memory_order_acquire)) return;
+                if (!haptics_active(token)) return;
                 if (!g_rumble_impact_generator)
                     g_rumble_impact_generator = [[UIImpactFeedbackGenerator alloc]
                         initWithStyle:UIImpactFeedbackStyleMedium];
