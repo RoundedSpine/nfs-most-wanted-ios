@@ -179,20 +179,23 @@ extern "C" uint32_t host_gpu2d_generation(void) {
     return state().generation;
 }
 
-extern "C" void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba, int x, int y,
+extern "C" int host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba, int x, int y,
                                    int rw, int rh) {
     std::lock_guard held(state().lock);
     gpu::Device *d = device();
     if (!d || !rgba || w <= 0 || h <= 0 || rw <= 0 || rh <= 0 ||
         x < 0 || y < 0 || x > w || y > h || rw > w - x || rh > h - y)
-        return;
+        return 0;
     int pitch = 0;
     if (!checked_rgba8_pitch(rw, pitch)) return;
     Surface *t = surface(d, id, w, h);
     if (!t) return;
     settle(d);
-    if (!d->upload(t->texture, {x, y, rw, rh}, rgba, pitch))
+    if (!d->upload(t->texture, {x, y, rw, rh}, rgba, pitch)) {
         fprintf(stderr, "gpu2d: texture upload failed (%dx%d)\n", rw, rh);
+        return 0;
+    }
+    return 1;
 }
 
 extern "C" void host_gpu2d_forget(uint32_t id) {
