@@ -1120,7 +1120,7 @@ static void ios_fatal_literal(const char *message, size_t length) {
         (void)ignored;
     }
 }
-static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
+[[maybe_unused]] static void ios_fatal_signal(int sig, siginfo_t *info, void *context) {
     // Fixed-format, async-signal-safe breadcrumb; avoid stdio, malloc, and locks.
     char record[] = "fatal signal=00 address=0x0000000000000000\n";
     unsigned value = (unsigned)sig;
