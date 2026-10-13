@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../platform/os.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 namespace gpu {
 
@@ -28,11 +31,13 @@ const char *vulkan_loader_path() {
 }
 #else
 
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
 std::unique_ptr<Device> vulkan_create_device();
 void *vulkan_test_native_surface(int w, int h);
 void *vulkan_native_surface_for_window(void *sdl_window);
 const char *vulkan_loader_path_impl();
 bool vulkan_available();
+#endif
 #ifdef __APPLE__
 std::unique_ptr<Device> metal_create_device();
 void *metal_test_native_surface(int w, int h);
@@ -42,8 +47,10 @@ void metal_release_window_surface(void *surface);
 
 static const char *chosen_backend() {
     const char *want = recomp_env("GPU_BACKEND");
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
     if (want && strcmp(want, "vulkan") == 0)
         return vulkan_available() ? "vulkan" : "none";
+#endif
 #ifdef __APPLE__
     if (want && strcmp(want, "metal") == 0)
         return "metal";
@@ -59,8 +66,10 @@ static const char *chosen_backend() {
 
 std::unique_ptr<Device> create_default_device() {
     const char *b = chosen_backend();
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
     if (strcmp(b, "vulkan") == 0)
         return vulkan_create_device();
+#endif
 #ifdef __APPLE__
     if (strcmp(b, "metal") == 0)
         return metal_create_device();
@@ -74,8 +83,10 @@ const char *default_backend_name() {
 
 void *test_native_surface(int w, int h) {
     const char *b = chosen_backend();
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
     if (strcmp(b, "vulkan") == 0)
         return vulkan_test_native_surface(w, h);
+#endif
 #ifdef __APPLE__
     if (strcmp(b, "metal") == 0)
         return metal_test_native_surface(w, h);
@@ -87,8 +98,10 @@ void *test_native_surface(int w, int h) {
 
 void *native_surface_for_window(void *sdl_window) {
     const char *b = chosen_backend();
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
     if (strcmp(b, "vulkan") == 0)
         return vulkan_native_surface_for_window(sdl_window);
+#endif
 #ifdef __APPLE__
     if (strcmp(b, "metal") == 0)
         return metal_native_surface_for_window(sdl_window);
@@ -105,7 +118,11 @@ void release_window_surface(void *surface) {
 }
 
 const char *vulkan_loader_path() {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    return nullptr;
+#else
     return vulkan_loader_path_impl();
+#endif
 }
 
 #endif // __EMSCRIPTEN__
