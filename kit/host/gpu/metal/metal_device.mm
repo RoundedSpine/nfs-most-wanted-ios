@@ -6,6 +6,7 @@
 #import <CoreVideo/CVHostTime.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +14,16 @@
 namespace gpu {
 
 namespace {
+
+// Standalone texture transfers do not pass through report_completion().
+void report_transfer_failure(const char *operation, id<MTLCommandBuffer> buffer) {
+    static std::atomic<unsigned> reports{0};
+    if (reports.fetch_add(1, std::memory_order_relaxed) >= 16) return;
+    NSError *error = buffer.error;
+    fprintf(stderr, "[gpu/metal] %s failed: status=%lu error=%s\\n",
+            operation, (unsigned long)buffer.status,
+            error ? error.localizedDescription.UTF8String : "no error object");
+}
 
 double diagnostic_now() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
@@ -318,7 +329,11 @@ bool MetalDevice::upload(Texture t, Region r, const void *bytes, int pitch, int 
         [blit endEncoding];
         [buffer commit];
         [buffer waitUntilCompleted];
-        return buffer.status == MTLCommandBufferStatusCompleted;
+        if (buffer.status != MTLCommandBufferStatusCompleted) {
+            report_transfer_failure("upload", buffer);
+            return false;
+        }
+        return true;
     }
 }
 bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
@@ -352,7 +367,10 @@ bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
         [blit endEncoding];
         [buffer commit];
         [buffer waitUntilCompleted];
-        if (buffer.status != MTLCommandBufferStatusCompleted) return false;
+        if (buffer.status != MTLCommandBufferStatusCompleted) {
+            report_transfer_failure("readback", buffer);
+            return false;
+        }
         for (int y = 0; y < r.h; ++y)
             memcpy(static_cast<uint8_t *>(bytes) + size_t(pitch) * size_t(y),
                    static_cast<const uint8_t *>(staging.contents) + row * NSUInteger(y), row);
