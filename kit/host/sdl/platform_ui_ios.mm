@@ -3,7 +3,6 @@
 // developer build or from files the player chose), the launcher's platform,
 // and the app lifecycle mapped onto audio and presentation.
 #include "platform_ui.h"
-#include "haptic_drain_scheduler.h"
 
 #include "../../platform/os.h"
 #include "../../runtime/layout.h"
@@ -14,7 +13,6 @@
 #include "../../mods/settings_menu.h"
 #include "game_config.h"
 
-#import <CoreHaptics/CoreHaptics.h>
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -727,174 +725,12 @@ void platform_ui_process_exit(int code) {
 }
 
 // ---------------------------------------------------------------------------
-// Haptics: UIKit impacts for on-screen controls and (by default) gameplay
-// rumble. The legacy continuous Core Haptics player remains for A/B testing.
-// UIKit objects are accessed only on the main queue.
+// Haptics: UIKit feedback for on-screen controls and gameplay device rumble.
+// UIKit generators are main-queue owned.
 // ---------------------------------------------------------------------------
 namespace {
 UIImpactFeedbackGenerator *g_tap_generator;
-UIImpactFeedbackGenerator *g_rumble_impact_generator; // main-queue owned
-CHHapticEngine *g_haptic_engine;
-id<CHHapticAdvancedPatternPlayer> g_rumble_player;
-bool g_rumble_active = false;
-bool g_rumble_silent = false; // main-queue-owned state
-// Avoid repeated Objective-C dispatch into a player/engine that has failed.
-// This is a conservative session-local circuit breaker, not an isa validator.
-unsigned g_rumble_consecutive_failures = 0;
-bool g_rumble_circuit_open = false;
-constexpr unsigned kRumbleFailureLimit = 3;
-// Serialized on the main queue; generations identify distinct player lifetimes.
-uint64_t g_rumble_generation = 0;
-uint64_t g_rumble_next_generation = 0;
-uint64_t g_rumble_sequence = 0;
-std::atomic<unsigned long long> g_rumble_engine_notifications{0};
-unsigned long long g_rumble_player_engine_epoch = 0;
-HapticDrainScheduler g_rumble_scheduler;
-
-std::atomic<unsigned long long> g_rumble_reset_epoch{0};
-std::atomic<unsigned long long> g_rumble_stop_epoch{0};
-std::atomic<long> g_rumble_last_stop_reason{0};
-unsigned long long g_rumble_seen_reset_epoch = 0;
-unsigned long long g_rumble_seen_stop_epoch = 0;
-bool g_rumble_engine_running = false;
-bool g_rumble_engine_starting = false;
-bool g_rumble_app_active = true;
-uint64_t g_rumble_start_generation = 0;
-uint64_t g_rumble_start_attempts = 0;
-uint64_t g_rumble_start_failures = 0;
-uint64_t g_rumble_update_failures = 0;
-uint64_t g_rumble_player_creations = 0;
-void rumble_process_latest();
-
-void rumble_trace(const char *event, id player, uint64_t generation,
-                  float intensity = -1.0f, const char *detail = "") {
-    // Never message or inspect a possibly dangling player here.
-    char line[320];
-    snprintf(line, sizeof(line),
-             "rumble seq=%" PRIu64 " event=%s gen=%" PRIu64
-             " ptr=%p active=%d intensity=%.4f notifications=%llu %s",
-             ++g_rumble_sequence, event, generation, (__bridge void *)player,
-             (int)g_rumble_active, intensity,
-             g_rumble_engine_notifications.load(std::memory_order_relaxed), detail);
-    ios_diagnostic(line); // flush and close before the next Objective-C operation
-}
-
-
-// The host pump refreshes device rumble every 30 seconds. Looping prevents
-// the underlying 30-second continuous event from silently expiring.
-constexpr NSTimeInterval kRumbleDuration = 30.0;
-
-bool device_supports_haptics() {
-    static const bool supported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
-    return supported;
-}
-
-// The Core Haptics factory returns a typed player. Messaging an already
-// invalid Objective-C object to check its protocol is not a safe validity test.
-// All player ownership and commands are confined to the main dispatch queue.
-void forget_rumble_player(const char *reason = "forget") {
-    rumble_trace("RELEASE_BEGIN", g_rumble_player, g_rumble_generation, -1, reason);
-    g_rumble_player = nil;
-    g_haptic_receiver.store(0, std::memory_order_relaxed);
-    g_haptic_generation.store(0, std::memory_order_relaxed);
-    g_rumble_active = false;
-    g_rumble_silent = false;
-    g_rumble_generation = 0;
-    g_rumble_player_engine_epoch = 0;
-    rumble_trace("RELEASE_DONE", nil, 0, -1, reason);
-}
-
-void stop_rumble_player() {
-    // Keep both the global and local strong references alive through the stop.
-    id<CHHapticAdvancedPatternPlayer> player = g_rumble_player;
-    const uint64_t generation = g_rumble_generation;
-    rumble_trace("STOP_BEGIN", player, generation);
-    if (!player) {
-        // No Objective-C message or redundant release/logging for a nil player.
-        return;
-    }
-    const auto epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
-    if (epoch != g_rumble_player_engine_epoch) {
-        rumble_trace("STOP_SKIP_ENGINE_CHANGED", player, generation);
-        forget_rumble_player("engine changed");
-        return;
-    }
-    g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
-    g_haptic_generation.store(generation, std::memory_order_relaxed);
-    g_haptic_phase.store(1, std::memory_order_release);
-    struct timespec stop_clock = {};
-    if (clock_gettime(CLOCK_MONOTONIC, &stop_clock) == 0) {
-        g_haptic_stop_begin_ns.store(uint64_t(stop_clock.tv_sec) * 1000000000ull +
-                                     uint64_t(stop_clock.tv_nsec), std::memory_order_relaxed);
-    }
-    g_haptic_operation_serial.fetch_add(1, std::memory_order_relaxed);
-    g_haptic_engine_epoch_snapshot.store(epoch, std::memory_order_relaxed);
-    g_haptic_engine_pointer.store(reinterpret_cast<uintptr_t>((__bridge void *)g_haptic_engine),
-                                  std::memory_order_relaxed);
-    g_haptic_main_thread.store([NSThread isMainThread] ? 1u : 0u, std::memory_order_relaxed);
-    // Pre-dispatch evidence: no player dereference, no Objective-C validation
-    // message, and no unsafe memory reads from the signal handler.
-    uint64_t stop_tid = 0;
-    (void)pthread_threadid_np(nullptr, &stop_tid);
-    g_haptic_stop_thread_id.store(stop_tid, std::memory_order_relaxed);
-    g_haptic_stop_selector.store(reinterpret_cast<uintptr_t>(@selector(stopAtTime:error:)),
-                                 std::memory_order_relaxed);
-    g_haptic_stop_player_at_entry.store(reinterpret_cast<uintptr_t>((__bridge void *)player),
-                                        std::memory_order_relaxed);
-    rumble_trace("STOP_SEND_BEGIN", player, generation);
-    NSError *error = nil;
-    BOOL ok = [player stopAtTime:CHHapticTimeImmediate error:&error];
-    // Record completion separately from the attempt timestamp. A crash during
-    // Objective-C dispatch leaves this value unchanged, identifying the last
-    // completed stop rather than incorrectly recording an attempted stop.
-    struct timespec stop_complete_clock = {};
-    if (clock_gettime(CLOCK_MONOTONIC, &stop_complete_clock) == 0) {
-        g_haptic_last_stop_ns.store(
-            uint64_t(stop_complete_clock.tv_sec) * 1000000000ull +
-                uint64_t(stop_complete_clock.tv_nsec),
-            std::memory_order_relaxed);
-    }
-    g_haptic_phase.store(0, std::memory_order_release);
-    g_haptic_receiver.store(0, std::memory_order_relaxed);
-    g_haptic_generation.store(0, std::memory_order_relaxed);
-    rumble_trace(ok && !error ? "STOP_OK" : "STOP_FAILED", player, generation);
-    if (!ok || error)
-        fprintf(stderr, "[ios] rumble stop failed: %s\\n",
-                error ? error.localizedDescription.UTF8String : "unknown error");
-    forget_rumble_player("stop completed");
-}
-
-CHHapticEngine *haptic_engine() {
-    if (!g_haptic_engine) {
-        NSError *error = nil;
-        CHHapticEngine *engine = [[CHHapticEngine alloc] initAndReturnError:&error];
-        if (!engine || error) {
-            fprintf(stderr, "[ios] CHHapticEngine init failed: %s\n",
-                    error ? error.localizedDescription.UTF8String : "unknown error");
-            return nil;
-        }
-        engine.playsHapticsOnly = YES;
-        // Callbacks are delivered on a Core Haptics thread. Do not clear a
-        // player asynchronously: that can erase a replacement player created
-        // after an interruption. The next request checks its command result
-        // and recreates an invalid player as necessary.
-        engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
-            g_rumble_last_stop_reason.store((long)reason, std::memory_order_release);
-            g_rumble_stop_epoch.fetch_add(1, std::memory_order_acq_rel);
-            g_rumble_engine_notifications.fetch_add(1, std::memory_order_acq_rel);
-            fprintf(stderr, "[ios] haptic engine stopped: %ld\n", (long)reason);
-            dispatch_async(dispatch_get_main_queue(), ^{ rumble_process_latest(); });
-        };
-        engine.resetHandler = ^{
-            g_rumble_reset_epoch.fetch_add(1, std::memory_order_acq_rel);
-            g_rumble_engine_notifications.fetch_add(1, std::memory_order_acq_rel);
-            fprintf(stderr, "[ios] haptic engine reset\n");
-            dispatch_async(dispatch_get_main_queue(), ^{ rumble_process_latest(); });
-        };
-        g_haptic_engine = engine;
-    }
-    return g_haptic_engine;
-}
+UIImpactFeedbackGenerator *g_rumble_impact_generator;
 } // namespace
 
 void platform_ui_haptic_tap() {
@@ -908,44 +744,19 @@ void platform_ui_haptic_tap() {
     });
 }
 
-// Diagnostic switch disables gameplay device haptics (UIKit or Core Haptics).
-// Controller rumble, UI tap feedback, and crash monitoring are unchanged.
+// Preserve the existing diagnostic switch and its workflow compatibility.
+// This controls gameplay device rumble only; touch taps and controllers remain.
 #ifndef NFSMW_DISABLE_DEVICE_CORE_HAPTICS
 #define NFSMW_DISABLE_DEVICE_CORE_HAPTICS 0
 #endif
-#ifndef NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
-#define NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP 1
-#endif
-// Default experiment: UIKit feedback instead of Core Haptics advanced players.
-// Set to 0 to restore the previous continuous-rumble implementation.
-#ifndef NFSMW_USE_UIKIT_RUMBLE
-#define NFSMW_USE_UIKIT_RUMBLE 1
-#endif
-
-
-namespace {
-void rumble_process_latest() {
-    // Callback-thread notifications only request main-queue reconciliation.
-    // A fresh request re-enters the existing serialized player logic.
-    if (!g_rumble_app_active) return;
-    const auto reset = g_rumble_reset_epoch.load(std::memory_order_acquire);
-    const auto stop = g_rumble_stop_epoch.load(std::memory_order_acquire);
-    if (reset == g_rumble_seen_reset_epoch && stop == g_rumble_seen_stop_epoch) return;
-    g_rumble_seen_reset_epoch = reset;
-    g_rumble_seen_stop_epoch = stop;
-    g_rumble_engine_running = false;
-    if (g_rumble_player) forget_rumble_player("engine notification");
-    // Defer actual restart to the next guest rumble command to avoid
-    // restarting during interruptions or while the app is suspended.
-}
-
-} // namespace
 
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
-#if NFSMW_USE_UIKIT_RUMBLE && !NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+#if NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+    (void)low;
+    (void)high;
+#else
     // UIKit impacts are discrete rather than continuous rumble.
     // Rate-limit requests before dispatch; UIKit remains main-queue owned.
-    // This path never messages a CHHapticAdvancedPatternPlayer.
     const uint16_t strength = std::max(low, high);
     if (!strength) return;
     constexpr uint64_t kMinPulseIntervalNs = 150000000ull; // <= ~6.7 Hz
@@ -971,197 +782,5 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
         }
     }
     return;
-#elif NFSMW_DISABLE_DEVICE_CORE_HAPTICS
-    (void)low;
-    (void)high;
-    return;
-#else
-    // Coalesce rapid game-thread updates: the queued main-thread drain uses
-    // the most recent request instead of replaying stale rumble commands.
-    if (!g_rumble_scheduler.publish(low, high))
-        return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-      // Sole main-queue owner. Drain any requests published while a framework
-      // operation was executing; never release ownership with a pending stop.
-      bool again = false;
-      do {
-      const auto request = g_rumble_scheduler.latest();
-      const float intensity = request.intensity / 65535.0f;
-      // One operation batch; early returns leave the scheduler drain intact.
-      [&] {
-      if (g_rumble_circuit_open) return;
-      if (!device_supports_haptics())
-          return;
-      ios_capture_loaded_images("before_core_haptics");
-      rumble_trace("REQUEST", g_rumble_player, g_rumble_generation, intensity);
-#if !NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
-      if (intensity <= 0.0f) {
-          if (g_rumble_player)
-              stop_rumble_player();
-          return;
-      }
-#else
-      if (intensity <= 0.0f && !g_rumble_player) return;
-      if (intensity <= 0.0f && g_rumble_silent &&
-          g_rumble_player_engine_epoch ==
-              g_rumble_engine_notifications.load(std::memory_order_acquire))
-          return;
 #endif
-
-      NSError *error = nil;
-      if (g_rumble_player) {
-          const auto epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
-          if (epoch != g_rumble_player_engine_epoch) {
-              rumble_trace("UPDATE_SKIP_ENGINE_CHANGED", g_rumble_player,
-                           g_rumble_generation, intensity);
-              forget_rumble_player("engine changed");
-          } else if (g_rumble_active) {
-              id<CHHapticAdvancedPatternPlayer> player = g_rumble_player;
-              const uint64_t generation = g_rumble_generation;
-              CHHapticDynamicParameter *param = [[CHHapticDynamicParameter alloc]
-                  initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
-                                value:intensity relativeTime:0];
-    g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
-    g_haptic_generation.store(generation, std::memory_order_relaxed);
-    g_haptic_phase.store(2, std::memory_order_release);
-              rumble_trace(intensity <= 0.0f ? "SILENCE_SEND_BEGIN" : "UPDATE_SEND_BEGIN",
-                           player, generation, intensity);
-              BOOL ok = [player sendParameters:@[ param ]
-                                        atTime:CHHapticTimeImmediate error:&error];
-    g_haptic_phase.store(0, std::memory_order_release);
-    g_haptic_receiver.store(0, std::memory_order_relaxed);
-    g_haptic_generation.store(0, std::memory_order_relaxed);
-              rumble_trace(ok && !error
-                               ? (intensity <= 0.0f ? "SILENCE_OK" : "UPDATE_OK")
-                               : (intensity <= 0.0f ? "SILENCE_FAILED" : "UPDATE_FAILED"),
-                           player, generation, intensity);
-              if (ok && !error &&
-                  epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) {
-                  g_rumble_silent = intensity <= 0.0f;
-                  g_rumble_consecutive_failures = 0;
-                  return;
-              }
-              ++g_rumble_update_failures;
-              if (++g_rumble_consecutive_failures >= kRumbleFailureLimit) {
-                  g_rumble_circuit_open = true;
-                  rumble_trace("CIRCUIT_OPEN_UPDATE", player, generation, intensity);
-              }
-#if NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
-              forget_rumble_player("parameter update failed");
-              if (intensity <= 0.0f) return;
-#else
-              stop_rumble_player();
-#endif
-          } else {
-              forget_rumble_player("inactive player");
-          }
-      }
-
-#if NFSMW_HAPTICS_SILENCE_INSTEAD_OF_STOP
-      if (intensity <= 0.0f) return; // do not create a player for silence
-#endif
-      CHHapticEngine *engine = haptic_engine();
-      if (!engine)
-          return;
-      error = nil;
-      const auto startup_epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
-      if (startup_epoch != g_rumble_player_engine_epoch && g_rumble_player)
-          forget_rumble_player("startup epoch changed");
-      if (g_rumble_engine_running &&
-          g_rumble_seen_reset_epoch != g_rumble_reset_epoch.load(std::memory_order_acquire))
-          g_rumble_engine_running = false;
-      BOOL started = YES;
-      if (!g_rumble_engine_running) {
-          ++g_rumble_start_attempts;
-          started = [engine startAndReturnError:&error];
-          if (started && !error &&
-              startup_epoch == g_rumble_engine_notifications.load(std::memory_order_acquire))
-              g_rumble_engine_running = true;
-      }
-      if (!started || error || !g_rumble_engine_running) {
-          if (++g_rumble_consecutive_failures >= kRumbleFailureLimit) {
-              g_rumble_circuit_open = true;
-              rumble_trace("CIRCUIT_OPEN_ENGINE", nil, 0, intensity);
-          }
-          ++g_rumble_start_failures;
-          fprintf(stderr, "[ios] haptic engine start failed: %s\n",
-                  error ? error.localizedDescription.UTF8String : "unknown error");
-          return;
-      }
-
-      CHHapticEventParameter *intensity_param = [[CHHapticEventParameter alloc]
-          initWithParameterID:CHHapticEventParameterIDHapticIntensity value:intensity];
-      CHHapticEventParameter *sharpness_param = [[CHHapticEventParameter alloc]
-          initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.3f];
-      CHHapticEvent *event =
-          [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
-                                        parameters:@[ intensity_param, sharpness_param ]
-                                      relativeTime:0 duration:kRumbleDuration];
-      error = nil;
-      CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ event ]
-                                                              parameters:@[]
-                                                                   error:&error];
-      if (!pattern || error)
-          return;
-      error = nil;
-      rumble_trace("CREATE_BEGIN", nil, g_rumble_next_generation + 1, intensity);
-      id<CHHapticAdvancedPatternPlayer> player =
-          [engine createAdvancedPlayerWithPattern:pattern error:&error];
-      const uint64_t generation = ++g_rumble_next_generation;
-      ++g_rumble_player_creations;
-      if (player) {
-          // Avoid inspecting framework object metadata for diagnostic logging.
-          rumble_trace("CREATE_RETURN", player, generation, intensity);
-      } else {
-          rumble_trace("CREATE_NULL", nil, generation, intensity);
-      }
-      rumble_trace("CREATE_RESULT_CHECK", player, generation, intensity);
-      if (!player || error) {
-          rumble_trace("CREATE_INVALID", player, generation, intensity);
-          fprintf(stderr, "[ios] haptic player creation/type validation failed\n");
-          return;
-      }
-      player.loopEnabled = YES;
-      player.loopEnd = kRumbleDuration;
-      error = nil;
-    g_haptic_receiver.store(reinterpret_cast<uintptr_t>((__bridge void *)player), std::memory_order_relaxed);
-    g_haptic_generation.store(generation, std::memory_order_relaxed);
-    g_haptic_phase.store(3, std::memory_order_release);
-      rumble_trace("START_BEGIN", player, generation, intensity);
-      BOOL ok = [player startAtTime:CHHapticTimeImmediate error:&error];
-    g_haptic_phase.store(0, std::memory_order_release);
-    g_haptic_receiver.store(0, std::memory_order_relaxed);
-    g_haptic_generation.store(0, std::memory_order_relaxed);
-      if (ok && !error) {
-          struct timespec start_clock = {};
-          if (clock_gettime(CLOCK_MONOTONIC, &start_clock) == 0)
-              g_haptic_last_start_ns.store(uint64_t(start_clock.tv_sec) * 1000000000ull +
-                                            uint64_t(start_clock.tv_nsec), std::memory_order_relaxed);
-      }
-      rumble_trace(ok && !error ? "START_OK" : "START_FAILED", player, generation, intensity);
-      if (ok && !error &&
-          startup_epoch == g_rumble_engine_notifications.load(std::memory_order_acquire)) {
-          g_rumble_player = player;
-          g_rumble_generation = generation;
-          g_rumble_player_engine_epoch = g_rumble_engine_notifications.load(std::memory_order_acquire);
-          g_rumble_active = true;
-          g_rumble_silent = false;
-          g_rumble_consecutive_failures = 0;
-          rumble_trace("RETAINED", g_rumble_player, generation, intensity);
-      } else {
-          g_rumble_engine_running = false;
-          if (++g_rumble_consecutive_failures >= kRumbleFailureLimit) {
-              g_rumble_circuit_open = true;
-              rumble_trace("CIRCUIT_OPEN_PLAYER_START", player, generation, intensity);
-          }
-          g_haptic_receiver.store(0, std::memory_order_relaxed);
-          g_haptic_generation.store(0, std::memory_order_relaxed);
-          fprintf(stderr, "[ios] haptic player start failed: %s\n",
-                  error ? error.localizedDescription.UTF8String : "unknown error");
-      }
-      }();
-      again = g_rumble_scheduler.next(request);
-      } while (again);
-    });
-#endif // gameplay device haptics
 }
