@@ -1,3 +1,6 @@
+#ifndef NFSMW_PERFORMANCE_BUILD
+#define NFSMW_PERFORMANCE_BUILD 0
+#endif
 // d3d9_host.cpp - the Direct3D 9 device's host entry points (dx/host_d9.h),
 // over whichever GPU backend the host's device belongs to (d3d9_backend.h).
 //
@@ -35,7 +38,7 @@
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
-#if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IPHONE && !NFSMW_PERFORMANCE_BUILD
 #include <chrono>
 #include <cstdlib>
 namespace {
@@ -803,7 +806,7 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
     t->submitted();
 }
 void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
-#if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IPHONE && !NFSMW_PERFORMANCE_BUILD
     // Called on the guest/game thread. A separate monitor records whether it stops advancing.
     static std::atomic<uint64_t> frame_count{0};
     static std::atomic<bool> watchdog_started{false};
@@ -847,7 +850,7 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
             }
             backend()->present(backbuffer, width, height);
         });
-#if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IPHONE && !NFSMW_PERFORMANCE_BUILD
     ios_cpu_trace("present_exit", frame);
 #endif
 }
