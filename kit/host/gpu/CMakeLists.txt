@@ -48,30 +48,33 @@ if(EMSCRIPTEN)
   return()
 endif()
 
-# The Vulkan backend builds everywhere; the loader is found at run time.
-add_library(volk OBJECT ${POP_ROOT}/third_party/volk/volk.c)
-target_include_directories(volk PUBLIC ${POP_ROOT}/third_party/volk ${POP_ROOT}/third_party/vulkan-headers/include)
-target_compile_definitions(volk PUBLIC VK_NO_PROTOTYPES)
-pop_optimize(volk 2)
+# iOS uses Metal only. Keep Vulkan/Volk for other native platforms.
+set(POP_GPU_BACKEND_OBJECTS)
+if(NOT IOS)
+  add_library(volk OBJECT ${POP_ROOT}/third_party/volk/volk.c)
+  target_include_directories(volk PUBLIC ${POP_ROOT}/third_party/volk ${POP_ROOT}/third_party/vulkan-headers/include)
+  target_compile_definitions(volk PUBLIC VK_NO_PROTOTYPES)
+  pop_optimize(volk 2)
 
-add_library(gpu_vulkan OBJECT vulkan/vulkan_loader.cpp vulkan/vulkan_device.cpp vulkan/vulkan_pipeline.cpp
-                               vulkan/vulkan_swapchain.cpp)
-target_link_libraries(gpu_vulkan PUBLIC volk)
-target_include_directories(gpu_vulkan PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(gpu_vulkan PRIVATE ${POP_WARN_HOST})
-pop_link_sdl(gpu_vulkan)
-if(NOT WIN32 AND NOT APPLE)
-  target_link_libraries(gpu_vulkan PUBLIC dl)
-endif()
-if(ANDROID)
-  target_link_libraries(gpu_vulkan PUBLIC vulkan)
-endif()
-pop_optimize(gpu_vulkan 2)
+  add_library(gpu_vulkan OBJECT vulkan/vulkan_loader.cpp vulkan/vulkan_device.cpp vulkan/vulkan_pipeline.cpp
+                                 vulkan/vulkan_swapchain.cpp)
+  target_link_libraries(gpu_vulkan PUBLIC volk)
+  target_include_directories(gpu_vulkan PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(gpu_vulkan PRIVATE ${POP_WARN_HOST})
+  pop_link_sdl(gpu_vulkan)
+  if(NOT WIN32 AND NOT APPLE)
+    target_link_libraries(gpu_vulkan PUBLIC dl)
+  endif()
+  if(ANDROID)
+    target_link_libraries(gpu_vulkan PUBLIC vulkan)
+  endif()
+  pop_optimize(gpu_vulkan 2)
 
-# gpu_backend: every backend this platform has plus the factory, as one
-# static library so indirect consumers get the objects. Hosts and tests link
-# this, never a backend directly.
-set(POP_GPU_BACKEND_OBJECTS $<TARGET_OBJECTS:gpu_vulkan> $<TARGET_OBJECTS:volk>)
+  # gpu_backend: every backend this platform has plus the factory, as one
+  # static library so indirect consumers get the objects. Hosts and tests link
+  # this, never a backend directly.
+  list(APPEND POP_GPU_BACKEND_OBJECTS $<TARGET_OBJECTS:gpu_vulkan> $<TARGET_OBJECTS:volk>)
+endif()
 if(APPLE)
   add_library(gpu_metal OBJECT metal/metal_device.mm metal/metal_surface.mm)
   target_compile_options(gpu_metal PRIVATE ${POP_WARN_HOST} $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
