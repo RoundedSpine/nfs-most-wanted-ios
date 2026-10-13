@@ -3,6 +3,19 @@ name: iOS Build
 
 on:
   workflow_dispatch:
+    inputs:
+      build_profile:
+        description: 'Instrumentation profile'
+        required: true
+        type: choice
+        options:
+          - diagnostic
+          - performance
+        default: diagnostic
+      disable_device_core_haptics:
+        description: 'Disable device Core Haptics rumble'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -111,6 +124,23 @@ jobs:
             echo "ERROR: Translation output missing."
             exit 1
           }
+
+      - name: Configure build options
+        env:
+          PROFILE: ${{ inputs.build_profile || 'diagnostic' }}
+          HAPTICS_OFF: ${{ inputs.disable_device_core_haptics }}
+        run: |
+          set -euo pipefail
+          case "$PROFILE" in
+            diagnostic) FLAGS="-DNFSMW_PERFORMANCE_BUILD=0" ;;
+            performance) FLAGS="-DNFSMW_PERFORMANCE_BUILD=1" ;;
+            *) exit 1 ;;
+          esac
+          if [ "$HAPTICS_OFF" = "true" ]; then
+            FLAGS="$FLAGS -DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=1"
+          fi
+          echo "CXXFLAGS=$FLAGS" >> "$GITHUB_ENV"
+          echo "OBJCXXFLAGS=$FLAGS" >> "$GITHUB_ENV"
 
       - name: Build unsigned iOS app
         run: |
