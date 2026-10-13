@@ -393,6 +393,11 @@ void platform_ui_haptic_tap() {
 }
 
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
+#if defined(NFSMW_DISABLE_DEVICE_CORE_HAPTICS) && NFSMW_DISABLE_DEVICE_CORE_HAPTICS
+    (void)low;
+    (void)high;
+    return;
+#else
     const float intensity = std::max(low, high) / 65535.0f;
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!device_supports_haptics())
@@ -444,4 +449,5 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
       if (!error)
           g_rumble_player = player;
     });
+#endif
 }
