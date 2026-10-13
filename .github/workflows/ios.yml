@@ -4,6 +4,14 @@ name: iOS Build
 on:
   workflow_dispatch:
     inputs:
+      build_profile:
+        description: 'Instrumentation profile (independent of haptics)'
+        required: true
+        type: choice
+        options:
+          - diagnostic
+          - performance
+        default: diagnostic
       disable_device_core_haptics:
         description: 'Diagnostic control: disable device Core Haptics (controller rumble stays enabled)'
         required: false
@@ -144,14 +152,28 @@ jobs:
             exit 1
           }
 
+      - name: Configure instrumentation profile
+        env:
+          BUILD_PROFILE: ${{ inputs.build_profile || 'diagnostic' }}
+        run: |
+          set -euo pipefail
+          case "$BUILD_PROFILE" in
+            diagnostic) FLAGS='-DNFSMW_PERFORMANCE_BUILD=0' ;;
+            performance) FLAGS='-DNFSMW_PERFORMANCE_BUILD=1' ;;
+            *) echo "::error::Unknown build profile: $BUILD_PROFILE"; exit 1 ;;
+          esac
+          echo "BUILD_PROFILE=$BUILD_PROFILE" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=$FLAGS" >> "$GITHUB_ENV"
+          echo "OBJCXXFLAGS=$FLAGS" >> "$GITHUB_ENV"
+
       - name: Configure Core Haptics isolation
         env:
           DISABLE_DEVICE_CORE_HAPTICS: ${{ inputs.disable_device_core_haptics }}
         run: |
           set -euo pipefail
           if [ "$DISABLE_DEVICE_CORE_HAPTICS" = "true" ]; then
-            echo "CXXFLAGS=-DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=1" >> "$GITHUB_ENV"
-            echo "OBJCXXFLAGS=-DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=1" >> "$GITHUB_ENV"
+            echo "CXXFLAGS=${CXXFLAGS:-} -DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=1" >> "$GITHUB_ENV"
+            echo "OBJCXXFLAGS=${OBJCXXFLAGS:-} -DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=1" >> "$GITHUB_ENV"
             echo "CORE_HAPTICS_MODE=disabled" >> "$GITHUB_ENV"
           else
             echo "CORE_HAPTICS_MODE=enabled" >> "$GITHUB_ENV"
@@ -275,7 +297,8 @@ jobs:
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' artifacts/build-diagnostics/Info.plist)"
           test "$BUNDLE_ID" = "dev.recompkit.nfsmw" || { echo "::error::Unexpected bundle identifier: $BUNDLE_ID"; exit 1; }
           {
-            echo "core_haptics_mode=${CORE_HAPTICS_MODE:-enabled}"
+            echo "build_profile=${BUILD_PROFILE:-diagnostic}"
+             echo "core_haptics_mode=${CORE_HAPTICS_MODE:-enabled}"
             echo "source_commit=$GITHUB_SHA"
             echo "source_ref=$GITHUB_REF"
             echo "workflow_run=$GITHUB_RUN_ID"
