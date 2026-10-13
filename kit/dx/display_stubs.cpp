@@ -33,8 +33,10 @@ __attribute__((weak)) double host_present_refresh_delay(int) {
 __attribute__((weak)) int host_gpu2d_available(void) {
     return 0;
 }
-__attribute__((weak)) void host_gpu2d_texture(uint32_t, int, int, const uint8_t *, int, int, int,
-                                              int) {}
+__attribute__((weak)) int host_gpu2d_texture(uint32_t, int, int, const uint8_t *, int, int, int,
+                                             int) {
+    return 0;
+}
 __attribute__((weak)) void host_gpu2d_forget(uint32_t) {}
 __attribute__((weak)) void host_gpu2d_reset(void) {}
 __attribute__((weak)) void host_gpu2d_clear(uint32_t, int, int, const float *) {}
