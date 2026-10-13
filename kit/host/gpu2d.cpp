@@ -23,10 +23,16 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <limits>
 #include <vector>
 
 namespace {
 
+bool checked_rgba8_pitch(int width, int &pitch) {
+    if (width <= 0 || width > std::numeric_limits<int>::max() / 4) return false;
+    pitch = width * 4;
+    return true;
+}
 struct Surface {
     gpu::Texture texture;
     int w = 0, h = 0;
@@ -171,11 +177,13 @@ extern "C" void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgb
     if (!d || !rgba || w <= 0 || h <= 0 || rw <= 0 || rh <= 0 ||
         x < 0 || y < 0 || x > w || y > h || rw > w - x || rh > h - y)
         return;
+    int pitch = 0;
+    if (!checked_rgba8_pitch(rw, pitch)) return;
     Surface *t = surface(d, id, w, h);
-    if (!t)
-        return;
+    if (!t) return;
     settle(d);
-    d->upload(t->texture, {x, y, rw, rh}, rgba, rw * 4);
+    if (!d->upload(t->texture, {x, y, rw, rh}, rgba, pitch))
+        fprintf(stderr, "gpu2d: texture upload failed (%dx%d)\n", rw, rh);
 }
 
 extern "C" void host_gpu2d_forget(uint32_t id) {
@@ -258,8 +266,10 @@ extern "C" int host_gpu2d_readback(uint32_t id, int w, int h, uint8_t *rgba) {
     auto it = state().surfaces.find(id);
     if (!d || !rgba || it == state().surfaces.end() || it->second.w != w || it->second.h != h)
         return 0;
+    int pitch = 0;
+    if (!checked_rgba8_pitch(w, pitch)) return 0;
     settle(d);
-    return d->readback(it->second.texture, {0, 0, w, h}, rgba, w * 4) ? 1 : 0;
+    return d->readback(it->second.texture, {0, 0, w, h}, rgba, pitch) ? 1 : 0;
 }
 
 // For the host that presents on the GPU (host/present.cpp): encode the copy
