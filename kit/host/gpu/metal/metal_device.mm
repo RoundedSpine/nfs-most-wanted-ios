@@ -274,82 +274,88 @@ id<MTLTexture> MetalDevice::native_texture(Texture t) {
 // pool per call is what lets a drawable's IOSurface go when the frame does;
 // without one they piled up at a frame a refresh until the process was paged
 // out.
+// Validate the rectangle and caller-supplied byte stride before accessing memory.
+static bool valid_transfer_region(Region r, NSUInteger width, NSUInteger height,
+                                  int pitch, int bpp) {
+    if (r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
+        pitch <= 0 || bpp <= 0) return false;
+    const size_t x = size_t(r.x), y = size_t(r.y);
+    if (x > width || y > height ||
+        size_t(r.w) > width - x || size_t(r.h) > height - y) return false;
+    return uint64_t(r.w) * uint64_t(bpp) <= uint64_t(pitch);
+}
 bool MetalDevice::upload(Texture t, Region r, const void *bytes, int pitch, int level) {
     @autoreleasepool {
         id<MTLTexture> texture = native_texture(t);
-        if (!texture || !bytes || level < 0 || level >= int(texture.mipmapLevelCount))
+        if (!texture || !bytes || level < 0 || NSUInteger(level) >= texture.mipmapLevelCount)
             return false;
-        const int w = std::max(1, int(texture.width) >> level),
-                  h = std::max(1, int(texture.height) >> level);
-        if (r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 || r.x + r.w > w || r.y + r.h > h)
-            return false;
+        const NSUInteger w = std::max<NSUInteger>(1, texture.width >> level);
+        const NSUInteger h = std::max<NSUInteger>(1, texture.height >> level);
+        const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
+        if (!valid_transfer_region(r, w, h, pitch, bpp)) return false;
         if (texture.storageMode == MTLStorageModeShared) {
             [texture replaceRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
-                       mipmapLevel:level
-                         withBytes:bytes
-                       bytesPerRow:pitch];
+                       mipmapLevel:level withBytes:bytes bytesPerRow:NSUInteger(pitch)];
             return true;
         }
-        // Private storage: stage through a shared buffer and a blit.
-        const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
-        const NSUInteger row = NSUInteger(r.w) * bpp;
-        id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
+        const NSUInteger row = NSUInteger(r.w) * NSUInteger(bpp);
+        if (NSUInteger(r.h) > NSUIntegerMax / row) return false;
+        const NSUInteger length = row * NSUInteger(r.h);
+        id<MTLBuffer> staging = [device_ newBufferWithLength:length
                                                      options:MTLResourceStorageModeShared];
+        if (!staging || !staging.contents) return false;
         for (int y = 0; y < r.h; ++y)
-            memcpy(static_cast<uint8_t *>(staging.contents) + row * y,
-                   static_cast<const uint8_t *>(bytes) + size_t(pitch) * y, row);
+            memcpy(static_cast<uint8_t *>(staging.contents) + row * NSUInteger(y),
+                   static_cast<const uint8_t *>(bytes) + size_t(pitch) * size_t(y), row);
         id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
+        if (!buffer) return false;
         id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
-        [blit copyFromBuffer:staging
-                   sourceOffset:0
-              sourceBytesPerRow:row
-            sourceBytesPerImage:row * r.h
-                     sourceSize:MTLSizeMake(r.w, r.h, 1)
-                      toTexture:texture
-               destinationSlice:0
-               destinationLevel:level
-              destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
+        if (!blit) return false;
+        [blit copyFromBuffer:staging sourceOffset:0 sourceBytesPerRow:row
+            sourceBytesPerImage:length sourceSize:MTLSizeMake(r.w, r.h, 1)
+            toTexture:texture destinationSlice:0 destinationLevel:level
+            destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
         [blit endEncoding];
         [buffer commit];
         [buffer waitUntilCompleted];
-        return true;
+        return buffer.status == MTLCommandBufferStatusCompleted;
     }
 }
 bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
     @autoreleasepool {
         id<MTLTexture> texture = native_texture(t);
-        if (!texture || !bytes || r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
-            r.x + r.w > int(texture.width) || r.y + r.h > int(texture.height))
+        if (!texture || !bytes) return false;
+        const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
+        if (!valid_transfer_region(r, texture.width, texture.height, pitch, bpp))
             return false;
         wait_for_gpu();
         if (texture.storageMode == MTLStorageModeShared) {
-            [texture getBytes:bytes
-                  bytesPerRow:pitch
-                   fromRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
-                  mipmapLevel:0];
+            [texture getBytes:bytes bytesPerRow:NSUInteger(pitch)
+                fromRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h) mipmapLevel:0];
             return true;
         }
-        const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
-        const NSUInteger row = NSUInteger(r.w) * bpp;
-        id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
+        const NSUInteger row = NSUInteger(r.w) * NSUInteger(bpp);
+        if (NSUInteger(r.h) > NSUIntegerMax / row) return false;
+        const NSUInteger length = row * NSUInteger(r.h);
+        id<MTLBuffer> staging = [device_ newBufferWithLength:length
                                                      options:MTLResourceStorageModeShared];
+        if (!staging || !staging.contents) return false;
         id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
+        if (!buffer) return false;
         id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
-        [blit copyFromTexture:texture
-                         sourceSlice:0
-                         sourceLevel:0
-                        sourceOrigin:MTLOriginMake(r.x, r.y, 0)
-                          sourceSize:MTLSizeMake(r.w, r.h, 1)
-                            toBuffer:staging
-                   destinationOffset:0
-              destinationBytesPerRow:row
-            destinationBytesPerImage:row * r.h];
+        if (!blit) return false;
+        [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(r.x, r.y, 0)
+            sourceSize:MTLSizeMake(r.w, r.h, 1)
+            toBuffer:staging destinationOffset:0
+            destinationBytesPerRow:row destinationBytesPerImage:length];
         [blit endEncoding];
         [buffer commit];
         [buffer waitUntilCompleted];
+        if (buffer.status != MTLCommandBufferStatusCompleted) return false;
         for (int y = 0; y < r.h; ++y)
-            memcpy(static_cast<uint8_t *>(bytes) + size_t(pitch) * y,
-                   static_cast<const uint8_t *>(staging.contents) + row * y, row);
+            memcpy(static_cast<uint8_t *>(bytes) + size_t(pitch) * size_t(y),
+                   static_cast<const uint8_t *>(staging.contents) + row * NSUInteger(y), row);
         return true;
     }
 }
