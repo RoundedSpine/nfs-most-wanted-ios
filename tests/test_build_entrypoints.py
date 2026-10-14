@@ -72,7 +72,9 @@ def test_setup_prefers_supported_python_without_ci_path_shim(tmp_path):
         path.write_text("#!/bin/sh\n" + body + "\n")
         path.chmod(0o755)
     result = subprocess.run(["/bin/sh", str(root / "setup.sh"), "game", "--check-only"],
-                            env={**os.environ, "PATH": str(bin_dir)}, text=True,
-                            capture_output=True, check=True)
+                            cwd=tmp_path,
+                            env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")},
+                            text=True, capture_output=True, check=True)
+    assert result.stderr == ""
     assert "supported-python-selected" in result.stdout
     assert "unsupported-python-selected" not in result.stdout
