@@ -290,16 +290,44 @@ bool MetalDevice::upload(Texture t, Region r, const void *bytes, int pitch, int 
                        bytesPerRow:pitch];
             return true;
         }
-        // Private storage: stage through a shared buffer and a blit.
+        // Private storage: copy caller-owned bytes immediately, then submit on
+        // the renderer's queue. Later committed consumers observe this blit in
+        // queue order; retainedReferences keeps staging alive through completion.
+        // Three slots cap staging pressure without a per-texture GPU drain.
         const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
         const NSUInteger row = NSUInteger(r.w) * bpp;
+        if (pitch < 0 || NSUInteger(pitch) < row)
+            return false;
+        dispatch_semaphore_t slots = uploads_;
+        dispatch_semaphore_wait(slots, DISPATCH_TIME_FOREVER);
         id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
                                                      options:MTLResourceStorageModeShared];
+        if (!staging) {
+            dispatch_semaphore_signal(slots);
+            return false;
+        }
         for (int y = 0; y < r.h; ++y)
             memcpy(static_cast<uint8_t *>(staging.contents) + row * y,
                    static_cast<const uint8_t *>(bytes) + size_t(pitch) * y, row);
-        id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
+        const CommandBuffer command = begin();
+        id<MTLCommandBuffer> buffer;
+        {
+            std::lock_guard lock(mutex_);
+            buffer = cmd(command)->buffer;
+        }
+        if (!buffer) {
+            std::lock_guard lock(mutex_);
+            commands_.erase(command.id);
+            dispatch_semaphore_signal(slots);
+            return false;
+        }
         id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
+        if (!blit) {
+            std::lock_guard lock(mutex_);
+            commands_.erase(command.id);
+            dispatch_semaphore_signal(slots);
+            return false;
+        }
         [blit copyFromBuffer:staging
                    sourceOffset:0
               sourceBytesPerRow:row
@@ -310,8 +338,14 @@ bool MetalDevice::upload(Texture t, Region r, const void *bytes, int pitch, int 
                destinationLevel:level
               destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
         [blit endEncoding];
-        [buffer commit];
-        [buffer waitUntilCompleted];
+        [buffer addCompletedHandler:^(id<MTLCommandBuffer> done) {
+          if (done.error)
+              fprintf(stderr, "[gpu/metal] texture upload failed: %s\n",
+                      done.error.localizedDescription.UTF8String);
+          dispatch_semaphore_signal(slots);
+        }];
+        // Track uploads in the same retirement fence as normal device commands.
+        commit(command);
         return true;
     }
 }
@@ -989,7 +1023,8 @@ Format MetalDevice::swapchain_format(Swapchain s) {
         if (it != swapchains_.end())
             layer = it->second.layer;
     }
-    return layer && layer.pixelFormat == MTLPixelFormatRGBA16Float ? Format::RGBA16F : Format::BGRA8;
+    return layer && layer.pixelFormat == MTLPixelFormatRGBA16Float ? Format::RGBA16F
+                                                                   : Format::BGRA8;
 }
 Texture MetalDevice::acquire(Swapchain s) {
     @autoreleasepool {

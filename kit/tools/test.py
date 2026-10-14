@@ -155,7 +155,7 @@ def integration(env, game_dir, build_root):
 
 
 def ios_haptics(game_dir, build_root):
-    """Compile the real iOS bridge against the SDK without translating a game."""
+    """Compile the iOS Metal renderer and bridge without translating a game."""
     sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
                                   text=True).strip()
     # Use the same SDL tag as the normal build, without building SDL or FFmpeg.
@@ -180,6 +180,9 @@ def ios_haptics(game_dir, build_root):
                "-isysroot", sdk]
     for directory in (headers / "include", ROOT, ROOT / "host", ROOT / "runtime", generated):
         command += ["-I", str(directory)]
+    for source in ("host/gpu/metal/metal_device.mm", "host/gpu/metal/d3d9_metal.mm"):
+        print("Checking iOS Metal renderer: %s" % source, flush=True)
+        run(command + [ROOT / source])
     for disabled in (0, 1):
         print("Checking iOS Core Haptics %s against %s" %
               ("disabled" if disabled else "enabled", sdk), flush=True)
@@ -196,7 +199,7 @@ def main():
     group.add_argument("--gameplay", action="store_true", help="Scripted native Options and gameplay run")
     group.add_argument("--integration", action="store_true", help="The host integration script against the game")
     group.add_argument("--compile-only", action="store_true", help="Build the native test binaries only")
-    group.add_argument("--ios-haptics", action="store_true", help="Check the iOS haptics bridge with Xcode, no game files needed")
+    group.add_argument("--ios-haptics", action="store_true", help="Check iOS Metal and haptics with Xcode, no game files needed")
     parser.add_argument("--preset", default=build_py.default_preset())
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",

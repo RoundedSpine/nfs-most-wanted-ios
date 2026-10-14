@@ -174,3 +174,14 @@ A `guest thunk ... fast-path miss` means only the small prober declined the code
 `recomp_unknown_call` next tries the integer interpreter. An `interp: routine ...
 stopped` or `call to unknown target` remains an execution problem. A successful
 synthetic bank routine does not establish every game's bank semantics.
+
+Metal last-presented dumps require `RECOMP_D3D9_KEEP_PRESENTED=1` before the
+backend is created. The smoke host enables it automatically; interactive play
+omits the otherwise unused GPU copy. The readback entry point remains serialized
+with rendering on the encoding thread and checks command completion before reading.
+iOS enables shader warm-up under `<profile>/ShaderWarm`; a
+`RECOMP_D3D9_SHADER_WARM_DIR=` entry in Documents/switches.txt disables it.
+The `--ios-haptics` SDK check also syntax-checks the Metal device and D3D9 renderer.
+`upload_arena_tests` exercises alignment and completion-owned buffer reuse without
+a Metal device. Device gameplay and Metal validation are still needed to measure
+frame time, capture behavior and upload latency under actual GPU load.

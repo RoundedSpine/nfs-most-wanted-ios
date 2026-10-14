@@ -22,6 +22,7 @@
 #include "../../d3d_render.h"
 #include "metal_device.h"
 #include "shader_warm_queue.h"
+#include "upload_arena.h"
 #include "pipeline_warm_spec.h"
 #include "../../present.h"
 #include "../../gpu_time.h"
@@ -378,17 +379,26 @@ struct QuadIn {
 // Test70: the pixel and vertex formats a recorded pipeline may name (the ones this renderer creates).
 bool warm_formats_ok(const PipeSpec &p) {
     static const uint32_t color[] = {
-        (uint32_t)MTLPixelFormatBGRA8Unorm,  (uint32_t)MTLPixelFormatBGRA8Unorm_sRGB, (uint32_t)MTLPixelFormatRGBA8Unorm,
-        (uint32_t)MTLPixelFormatA8Unorm,     (uint32_t)MTLPixelFormatRGBA16Unorm,     (uint32_t)MTLPixelFormatR16Float,
-        (uint32_t)MTLPixelFormatRGBA16Float, (uint32_t)MTLPixelFormatR32Float,        (uint32_t)MTLPixelFormatRGBA32Float,
-        (uint32_t)MTLPixelFormatBGR10A2Unorm, (uint32_t)MTLPixelFormatRGB10A2Unorm};
-    static const uint32_t vertex[] = {
-        (uint32_t)MTLVertexFormatFloat, (uint32_t)MTLVertexFormatFloat2, (uint32_t)MTLVertexFormatFloat3,
-        (uint32_t)MTLVertexFormatFloat4, (uint32_t)MTLVertexFormatUChar4Normalized_BGRA,
-        (uint32_t)MTLVertexFormatUChar4Normalized, (uint32_t)MTLVertexFormatShort2Normalized,
-        (uint32_t)MTLVertexFormatShort4Normalized, (uint32_t)MTLVertexFormatUShort2Normalized,
-        (uint32_t)MTLVertexFormatUShort4Normalized, (uint32_t)MTLVertexFormatUInt1010102Normalized,
-        (uint32_t)MTLVertexFormatInt1010102Normalized, (uint32_t)MTLVertexFormatHalf2, (uint32_t)MTLVertexFormatHalf4};
+        (uint32_t)MTLPixelFormatBGRA8Unorm,  (uint32_t)MTLPixelFormatBGRA8Unorm_sRGB,
+        (uint32_t)MTLPixelFormatRGBA8Unorm,  (uint32_t)MTLPixelFormatA8Unorm,
+        (uint32_t)MTLPixelFormatRGBA16Unorm, (uint32_t)MTLPixelFormatR16Float,
+        (uint32_t)MTLPixelFormatRGBA16Float, (uint32_t)MTLPixelFormatR32Float,
+        (uint32_t)MTLPixelFormatRGBA32Float, (uint32_t)MTLPixelFormatBGR10A2Unorm,
+        (uint32_t)MTLPixelFormatRGB10A2Unorm};
+    static const uint32_t vertex[] = {(uint32_t)MTLVertexFormatFloat,
+                                      (uint32_t)MTLVertexFormatFloat2,
+                                      (uint32_t)MTLVertexFormatFloat3,
+                                      (uint32_t)MTLVertexFormatFloat4,
+                                      (uint32_t)MTLVertexFormatUChar4Normalized_BGRA,
+                                      (uint32_t)MTLVertexFormatUChar4Normalized,
+                                      (uint32_t)MTLVertexFormatShort2Normalized,
+                                      (uint32_t)MTLVertexFormatShort4Normalized,
+                                      (uint32_t)MTLVertexFormatUShort2Normalized,
+                                      (uint32_t)MTLVertexFormatUShort4Normalized,
+                                      (uint32_t)MTLVertexFormatUInt1010102Normalized,
+                                      (uint32_t)MTLVertexFormatInt1010102Normalized,
+                                      (uint32_t)MTLVertexFormatHalf2,
+                                      (uint32_t)MTLVertexFormatHalf4};
     auto in = [](uint32_t v, const uint32_t *set, size_t n) {
         for (size_t i = 0; i < n; ++i)
             if (set[i] == v)
@@ -407,14 +417,15 @@ bool warm_formats_ok(const PipeSpec &p) {
 }
 
 // Test70: the recorded identity of a pipeline descriptor (every field the draw path sets).
-PipeSpec warm_spec_of(MTLRenderPipelineDescriptor *pd, const std::string &vkey, const std::string &fkey) {
+PipeSpec warm_spec_of(MTLRenderPipelineDescriptor *pd, const std::string &vkey,
+                      const std::string &fkey) {
     PipeSpec p;
     p.vkey = vkey;
     p.fkey = fkey;
     p.samples = (uint32_t)pd.rasterSampleCount;
     p.depth = (uint32_t)pd.depthAttachmentPixelFormat;
     if (pd.stencilAttachmentPixelFormat != pd.depthAttachmentPixelFormat)
-        p.samples = 0;   // not a combination the renderer records (refused by valid())
+        p.samples = 0; // not a combination the renderer records (refused by valid())
     for (int i = 0; i < 4; ++i) {
         MTLRenderPipelineColorAttachmentDescriptor *a = pd.colorAttachments[i];
         if (a.pixelFormat == MTLPixelFormatInvalid)
@@ -450,7 +461,8 @@ PipeSpec warm_spec_of(MTLRenderPipelineDescriptor *pd, const std::string &vkey, 
 }
 
 // Test70: the descriptor a recorded identity describes (the inverse of warm_spec_of).
-MTLRenderPipelineDescriptor *warm_descriptor(const PipeSpec &p, id<MTLFunction> vfn, id<MTLFunction> ffn) {
+MTLRenderPipelineDescriptor *warm_descriptor(const PipeSpec &p, id<MTLFunction> vfn,
+                                             id<MTLFunction> ffn) {
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     pd.rasterSampleCount = p.samples;
     pd.vertexFunction = vfn;
@@ -496,7 +508,7 @@ class ShaderWarm {
     ShaderWarm(id<MTLDevice> dev, std::string dir, std::string seed, std::string identity)
         : dev_(dev), dir_(std::move(dir)), identity_(std::move(identity)) {
         if (!seed.empty())
-            load_order(seed);   // read-only list shipped with the application
+            load_order(seed); // read-only list shipped with the application
         if (!dir_.empty()) {
             mkdir(dir_.c_str(), 0700);
             load_order(dir_);
@@ -525,7 +537,8 @@ class ShaderWarm {
         // TEST ONLY: a per-run salt makes every compile miss the system Metal cache (a controlled
         // cold start without deleting any system cache).
         if (const char *salt = recomp_env("D3D9_SHADER_SALT"); salt && *salt)
-            opts.preprocessorMacros = @{@"RECOMP_SHADER_SALT" : [NSString stringWithUTF8String:salt]};
+            opts.preprocessorMacros =
+                @{@"RECOMP_SHADER_SALT" : [NSString stringWithUTF8String:salt]};
         return opts;
     }
     std::string key(const std::string &src) const {
@@ -574,9 +587,11 @@ class ShaderWarm {
         }
         if (known) {
             if (++repaired_ == 1)
-                fprintf(stderr, "d3d9 metal: shader warm-up rewrote a recorded entry that was missing or "
-                                "damaged (%s)\n", k.c_str());
-            return;   // already listed in order.txt
+                fprintf(stderr,
+                        "d3d9 metal: shader warm-up rewrote a recorded entry that was missing or "
+                        "damaged (%s)\n",
+                        k.c_str());
+            return; // already listed in order.txt
         }
         if (FILE *o = fopen((dir_ + "/order.txt").c_str(), "a")) {
             fprintf(o, "%s\n", k.c_str());
@@ -585,8 +600,12 @@ class ShaderWarm {
         queue_.add_known(k);
         profile_keys_.insert(k);
     }
-    uint32_t hits() { return queue_.hits(); }
-    uint32_t coalesced() { return queue_.coalesced(); }
+    uint32_t hits() {
+        return queue_.hits();
+    }
+    uint32_t coalesced() {
+        return queue_.coalesced();
+    }
 
     // Test70: the finished pipeline recorded with exactly this identity, if the warm-up has it
     // (handed over once); nil means create it here. A recorded identity the worker has not reached
@@ -602,7 +621,9 @@ class ShaderWarm {
         id<MTLRenderPipelineState> pso = it->second;
         pipe_ready_.erase(it);
         if (++pipe_hits_ == 1 || pipe_hits_ == 10 || pipe_hits_ == 100 || pipe_hits_ == 1000)
-            fprintf(stderr, "d3d9 metal: pipeline warm-up: %u pre-built pipelines used so far (at %.3f s monotonic)\n",
+            fprintf(stderr,
+                    "d3d9 metal: pipeline warm-up: %u pre-built pipelines used so far (at %.3f s "
+                    "monotonic)\n",
                     pipe_hits_, os_monotonic_ns() / 1e9);
         return pso;
     }
@@ -631,10 +652,14 @@ class ShaderWarm {
         std::lock_guard<std::mutex> lock(pipe_mutex_);
         return pipe_hits_;
     }
-    bool pipelines_on() const { return pipes_on_; }
+    bool pipelines_on() const {
+        return pipes_on_;
+    }
 
   private:
-    bool in_profile(const std::string &k) const { return profile_keys_.count(k) != 0; }
+    bool in_profile(const std::string &k) const {
+        return profile_keys_.count(k) != 0;
+    }
     static bool same_file(const std::string &path, const std::string &src) {
         struct stat st;
         if (stat(path.c_str(), &st) != 0 || (uint64_t)st.st_size != src.size())
@@ -653,8 +678,10 @@ class ShaderWarm {
         // loses this entry's head start. Said once, not per shader.
         if (!write_failure_logged_) {
             write_failure_logged_ = true;
-            fprintf(stderr, "d3d9 metal: shader warm-up could not record into %s (%s); continuing "
-                            "without recording\n", dir_.c_str(), strerror(errno));
+            fprintf(stderr,
+                    "d3d9 metal: shader warm-up could not record into %s (%s); continuing "
+                    "without recording\n",
+                    dir_.c_str(), strerror(errno));
         }
     }
     static bool hex_key(const char *s) {
@@ -692,7 +719,7 @@ class ShaderWarm {
                 line[--n] = 0;
             PipeSpec p;
             if (!PipeSpec::parse(line, &p) || !warm_formats_ok(p))
-                continue;   // damaged, partial or altered: the draw path creates that pipeline itself
+                continue; // damaged, partial or altered: the draw path creates that pipeline itself
             if (pipe_known_.insert(line).second)
                 pipe_order_.push_back(line);
         }
@@ -720,7 +747,9 @@ class ShaderWarm {
             const std::string src = read_source(d->second, k);
             if (!src.empty() && src.size() <= (1u << 20) && key(src) == k) {
                 NSError *error = nil;
-                lib = [dev_ newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()] options:opts error:&error];
+                lib = [dev_ newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
+                                         options:opts
+                                           error:&error];
             }
         }
         libs_[k] = lib;
@@ -746,18 +775,20 @@ class ShaderWarm {
             }
             @autoreleasepool {
                 id<MTLLibrary> vl = worker_library(p.vkey, opts), fl = worker_library(p.fkey, opts);
-                id<MTLFunction> vfn = [vl newFunctionWithName:@"vs_main"], ffn = [fl newFunctionWithName:@"ps_main"];
+                id<MTLFunction> vfn = [vl newFunctionWithName:@"vs_main"],
+                                ffn = [fl newFunctionWithName:@"ps_main"];
                 if (!vfn || !ffn) {
                     ++skipped;
                     continue;
                 }
                 MTLRenderPipelineDescriptor *pd = warm_descriptor(p, vfn, ffn);
                 if (warm_spec_of(pd, p.vkey, p.fkey).text() != spec) {
-                    ++mismatched;   // would not be the identity the draw path asks for
+                    ++mismatched; // would not be the identity the draw path asks for
                     continue;
                 }
                 NSError *error = nil;
-                id<MTLRenderPipelineState> pso = [dev_ newRenderPipelineStateWithDescriptor:pd error:&error];
+                id<MTLRenderPipelineState> pso = [dev_ newRenderPipelineStateWithDescriptor:pd
+                                                                                      error:&error];
                 if (!pso) {
                     ++skipped;
                     continue;
@@ -773,10 +804,11 @@ class ShaderWarm {
         }
         libs_.clear();
         fprintf(stderr,
-                "d3d9 metal: pipeline warm-up created %u recorded pipelines in the background in %.1f ms "
+                "d3d9 metal: pipeline warm-up created %u recorded pipelines in the background in "
+                "%.1f ms "
                 "(%u skipped, %u mismatched, %u created first by the draw path, %zu recorded%s)\n",
-                made, (os_monotonic_ns() - t0) / 1e6, skipped, mismatched, taken_over, pipe_order_.size(),
-                stop_.load() ? ", stopped early" : "");
+                made, (os_monotonic_ns() - t0) / 1e6, skipped, mismatched, taken_over,
+                pipe_order_.size(), stop_.load() ? ", stopped early" : "");
     }
     void run() {
         const uint64_t t0 = os_monotonic_ns();
@@ -788,26 +820,28 @@ class ShaderWarm {
                 break;
             const std::string src = read_source(entry.second, k);
             if (src.empty() || src.size() > (1u << 20) || key(src) != k) {
-                ++skipped;   // missing, oversized, stale or altered: the draw path compiles it itself
+                ++skipped; // missing, oversized, stale or altered: the draw path compiles it itself
                 continue;
             }
             if (!queue_.begin(k)) {
-                ++taken_over;   // first use got there first and compiled it
+                ++taken_over; // first use got there first and compiled it
                 continue;
             }
             @autoreleasepool {
                 NSError *error = nil;
-                id<MTLLibrary> lib = [dev_ newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
-                                                        options:opts
-                                                          error:&error];
+                id<MTLLibrary> lib =
+                    [dev_ newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
+                                       options:opts
+                                         error:&error];
                 queue_.finish(k, lib, lib != nil);
                 ++(lib ? compiled : skipped);
                 if (lib && !pipe_order_.empty())
-                    libs_[k] = lib;   // kept for the pipeline half below
+                    libs_[k] = lib; // kept for the pipeline half below
             }
         }
         fprintf(stderr,
-                "d3d9 metal: shader warm-up compiled %u recorded libraries in the background in %.1f ms "
+                "d3d9 metal: shader warm-up compiled %u recorded libraries in the background in "
+                "%.1f ms "
                 "(%u skipped, %u compiled first by the draw path, %zu recorded%s)\n",
                 compiled, (os_monotonic_ns() - t0) / 1e6, skipped, taken_over, order_.size(),
                 stop_.load() ? ", stopped early" : "");
@@ -817,9 +851,9 @@ class ShaderWarm {
 
     id<MTLDevice> dev_;
     std::string dir_, identity_;
-    std::vector<std::pair<std::string, std::string>> order_;   // key, directory (worker only)
+    std::vector<std::pair<std::string, std::string>> order_; // key, directory (worker only)
     ShaderWarmQueue<id<MTLLibrary>> queue_;
-    std::set<std::string> profile_keys_;   // keys listed in the profile's order.txt (writable copies)
+    std::set<std::string> profile_keys_; // keys listed in the profile's order.txt (writable copies)
     std::mutex record_mutex_;
     uint32_t repaired_ = 0;
     bool write_failure_logged_ = false;
@@ -861,14 +895,16 @@ class Renderer final : public D9Backend {
             fprintf(stderr, "d3d9 metal: utility shaders failed: %s\n",
                     error.localizedDescription.UTF8String);
         frames_ = dispatch_semaphore_create(3);
-        const char *warm = recomp_env("D3D9_SHADER_WARM_DIR"), *seed = recomp_env("D3D9_SHADER_WARM_SEED");
+        const char *warm = recomp_env("D3D9_SHADER_WARM_DIR"),
+                   *seed = recomp_env("D3D9_SHADER_WARM_SEED");
         if ((warm && *warm) || (seed && *seed)) {
             // Namespace of the recorded keys. The compile options themselves are always the current
             // run's (the background and draw paths share ShaderWarm::options()).
             std::string identity = "msl-v1";
             if (@available(macOS 15.0, iOS 18.0, *))
                 identity += "-safe";
-            warm_ = std::make_unique<ShaderWarm>(mtl_, warm ? warm : "", seed ? seed : "", identity);
+            warm_ =
+                std::make_unique<ShaderWarm>(mtl_, warm ? warm : "", seed ? seed : "", identity);
         }
         MTLVertexDescriptor *vd = nil;
         (void)vd;
@@ -990,8 +1026,9 @@ class Renderer final : public D9Backend {
             // samples the game asked for, so an anti-aliasing change through a reset can be seen.
             static const bool stats = recomp_env("D3D9_STATS") != nullptr;
             if (stats && target && td.width >= 1280)
-                fprintf(stderr, "d3d9 metal: render target %u defined %lux%lu, %u samples requested\n", d.id,
-                        (unsigned long)td.width, (unsigned long)td.height, d.samples);
+                fprintf(stderr,
+                        "d3d9 metal: render target %u defined %lux%lu, %u samples requested\n",
+                        d.id, (unsigned long)td.width, (unsigned long)td.height, d.samples);
         }
         if (d.samples > 1 && target && d.kind == HOST_D9_TEX_2D && !t.info.block && t.texture) {
             NSUInteger n = d.samples >= 4 ? 4 : 2;
@@ -1012,9 +1049,13 @@ class Renderer final : public D9Backend {
                 note_alloc(AS_MSAA, t.msaa, md.width, md.height, n, d.format);
                 t.samples = t.msaa ? (uint32_t)n : 1;
                 // Test70 (stable-bar evidence): which targets are really multisampled, once per size.
-                if (t.msaa && msaa_logged_.size() < 16 && msaa_logged_.insert((uint64_t)td.width << 32 | td.height << 4 | n).second)
-                    fprintf(stderr, "d3d9 metal: render target %lux%lu is multisampled x%lu (%u requested), resolved into its texture\n",
-                            (unsigned long)td.width, (unsigned long)td.height, (unsigned long)n, d.samples);
+                if (t.msaa && msaa_logged_.size() < 16 &&
+                    msaa_logged_.insert((uint64_t)td.width << 32 | td.height << 4 | n).second)
+                    fprintf(stderr,
+                            "d3d9 metal: render target %lux%lu is multisampled x%lu (%u "
+                            "requested), resolved into its texture\n",
+                            (unsigned long)td.width, (unsigned long)td.height, (unsigned long)n,
+                            d.samples);
             }
         }
         index_texture(d.id, &t);
@@ -1214,8 +1255,8 @@ class Renderer final : public D9Backend {
     // GetRenderTargetData without the wait: a blit into a shared buffer at the end of the work
     // encoded so far; the command buffer's completion hands the image over (one sample per guest
     // pixel, as read() does). Nothing here waits for the GPU.
-    void read_async(uint32_t tex_id, uint32_t face, uint32_t level, uint32_t ticket, uint64_t request,
-                    ReadDeliver deliver) override {
+    void read_async(uint32_t tex_id, uint32_t face, uint32_t level, uint32_t ticket,
+                    uint64_t request, ReadDeliver deliver) override {
         auto it = textures_.find(tex_id);
         if (it == textures_.end() || !it->second.texture) {
             deliver(ticket, request, nullptr, 0, 0);
@@ -1423,7 +1464,8 @@ class Renderer final : public D9Backend {
                 hud_rs_[20] = 1;
                 hud_rs_[171] = 1;
             }
-            hud_rs_[206] = 1; // separate alpha: ZERO, INVSRCALPHA, ADD (dest alpha x (1 - HUD coverage))
+            hud_rs_[206] =
+                1; // separate alpha: ZERO, INVSRCALPHA, ADD (dest alpha x (1 - HUD coverage))
             hud_rs_[207] = 1;
             hud_rs_[208] = 6;
             hud_rs_[209] = 1;
@@ -1433,7 +1475,9 @@ class Renderer final : public D9Backend {
             if (d.hdr_scene_texture) {
                 hud_rs_[208] = 2;
                 if (++hdr_scene_draws_ == 1 || hdr_scene_draws_ % 36000 == 0) {
-                    fprintf(stderr, "d3d9 metal: HDR scene texture under the HUD (the mirror) kept its highlight expansion: %llu draws (Test133)\n",
+                    fprintf(stderr,
+                            "d3d9 metal: HDR scene texture under the HUD (the mirror) kept its "
+                            "highlight expansion: %llu draws (Test133)\n",
                             (unsigned long long)hdr_scene_draws_);
                 }
             }
@@ -2343,10 +2387,12 @@ class Renderer final : public D9Backend {
     // by asking for it, and a colour source keeps the ordinary path.
     void stretch_depth(HostD9Surface src, HostD9Surface dst, id<MTLTexture> t) {
         Tex *st = tex_ptr(src.id);
-        {   // Ledger L1: before Test121 this request was dropped; say when anything first asks for it
+        { // Ledger L1: before Test121 this request was dropped; say when anything first asks for it
             static unsigned long long n = 0;
             if (n++ == 0)
-                fprintf(stderr, "d3d9 metal: depth StretchRect into colour target %u (%ux%u px; first request; Test121)\n",
+                fprintf(stderr,
+                        "d3d9 metal: depth StretchRect into colour target %u (%ux%u px; first "
+                        "request; Test121)\n",
                         dst.id, (unsigned)t.width, (unsigned)t.height);
         }
         if (!st || src.level || t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8)
@@ -2365,9 +2411,9 @@ class Renderer final : public D9Backend {
             return;
         MTLPixelFormat cf[4] = {t.pixelFormat, MTLPixelFormatInvalid, MTLPixelFormatInvalid,
                                 MTLPixelFormatInvalid};
-        id<MTLRenderPipelineState> pso =
-            utility_pipeline(mix(ms ? 0xd3c1ull : 0xd3c0ull, t.pixelFormat),
-                             ms ? @"depth_copy_ms_fs" : @"depth_copy_fs", cf, MTLPixelFormatInvalid, true);
+        id<MTLRenderPipelineState> pso = utility_pipeline(
+            mix(ms ? 0xd3c1ull : 0xd3c0ull, t.pixelFormat),
+            ms ? @"depth_copy_ms_fs" : @"depth_copy_fs", cf, MTLPixelFormatInvalid, true);
         if (!pso) {
             end_pass();
             return;
@@ -2402,19 +2448,22 @@ class Renderer final : public D9Backend {
         shader_frame_ns_ += ns;
         shader_total_ns_ += ns;
         (library ? shader_frame_lib_ns_ : shader_frame_pso_ns_) += ns;
-        if (ns > shader_frame_max_ns_) shader_frame_max_ns_ = ns;
+        if (ns > shader_frame_max_ns_)
+            shader_frame_max_ns_ = ns;
         ++(library ? shader_frame_libs_ : shader_frame_psos_);
     }
     void report_shader_work() {
         if (shader_frame_ns_ >= 50000000ull && shader_reports_ < 200) {
             ++shader_reports_;
             fprintf(stderr,
-                    "d3d9 metal: shader compilation held this frame %.1f ms (%u libraries %.1f ms, %u pipelines %.1f ms, "
-                    "longest %.1f ms; %.0f ms in all so far; %u pre-compiled used, %u waits on the warm-up, %u pre-built pipelines used; at %.3f s monotonic)\n",
-                    shader_frame_ns_ / 1e6, shader_frame_libs_, shader_frame_lib_ns_ / 1e6, shader_frame_psos_,
-                    shader_frame_pso_ns_ / 1e6, shader_frame_max_ns_ / 1e6,
-                    shader_total_ns_ / 1e6, warm_ ? warm_->hits() : 0u, warm_ ? warm_->coalesced() : 0u,
-                    warm_ ? warm_->pipeline_hits() : 0u,
+                    "d3d9 metal: shader compilation held this frame %.1f ms (%u libraries %.1f ms, "
+                    "%u pipelines %.1f ms, "
+                    "longest %.1f ms; %.0f ms in all so far; %u pre-compiled used, %u waits on the "
+                    "warm-up, %u pre-built pipelines used; at %.3f s monotonic)\n",
+                    shader_frame_ns_ / 1e6, shader_frame_libs_, shader_frame_lib_ns_ / 1e6,
+                    shader_frame_psos_, shader_frame_pso_ns_ / 1e6, shader_frame_max_ns_ / 1e6,
+                    shader_total_ns_ / 1e6, warm_ ? warm_->hits() : 0u,
+                    warm_ ? warm_->coalesced() : 0u, warm_ ? warm_->pipeline_hits() : 0u,
                     os_monotonic_ns() / 1e9);
         }
         shader_frame_ns_ = shader_frame_max_ns_ = shader_frame_lib_ns_ = shader_frame_pso_ns_ = 0;
@@ -2446,7 +2495,8 @@ class Renderer final : public D9Backend {
         base_rows_ = t.desc.height;
         w = (uint32_t)t.texture.width;
         h = (uint32_t)t.texture.height;
-        keep_presented(t, w, h);
+        if (keep_presented_)
+            keep_presented(t, w, h);
         flush();
         uint64_t trace_frame = trace_ ? trace_->current_frame_number() : 0;
         uint64_t present_wall_us = os_wall_time_us();
@@ -2597,23 +2647,23 @@ class Renderer final : public D9Backend {
     }
 
     bool read_presented(uint8_t *rgb, uint32_t cap, uint32_t *w, uint32_t *h) override {
-        id<MTLTexture> kept;
-        id<MTLCommandBuffer> cmd;
-        {
-            std::lock_guard<std::mutex> lock(kept_mutex_);
-            kept = kept_;
-            cmd = kept_cmd_;
-            *w = kept_w_;
-            *h = kept_h_;
-        }
+        // Host entry points serialize this with present on the encoding thread.
+        // Also hold the snapshot lock across GPU completion and the CPU copy:
+        // future direct callers must not encode another write to kept_ here.
+        std::lock_guard<std::mutex> lock(kept_mutex_);
+        id<MTLTexture> kept = kept_;
+        id<MTLCommandBuffer> cmd = kept_cmd_;
+        *w = kept_w_;
+        *h = kept_h_;
         if (!kept)
             return false;
         uint32_t fw = *w, fh = *h;
         if (!rgb || cap < fw * fh * 3)
             return false;
         [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted)
+            return false;
         std::vector<uint8_t> bgra((size_t)fw * fh * 4);
-        std::lock_guard<std::mutex> lock(kept_mutex_);
         [kept getBytes:bgra.data()
             bytesPerRow:fw * 4
              fromRegion:MTLRegionMake2D(0, 0, fw, fh)
@@ -2815,18 +2865,29 @@ class Renderer final : public D9Backend {
     // logged, and when the device's allocated size grows by more than 1 GB within two seconds the log gets the
     // growth by site with each site's last descriptor and the pass it was made for. A counter read and an add per
     // allocation; one property read per presented frame.
-    enum AllocSite { AS_TEXTURE, AS_MSAA, AS_READBACK, AS_BUFFER, AS_BUFFER_SPARE, AS_KEPT, AS_FITTED_DEPTH,
-                     AS_TRANSIENT, AS_COUNT };
+    enum AllocSite {
+        AS_TEXTURE,
+        AS_MSAA,
+        AS_READBACK,
+        AS_BUFFER,
+        AS_BUFFER_SPARE,
+        AS_KEPT,
+        AS_FITTED_DEPTH,
+        AS_TRANSIENT,
+        AS_COUNT
+    };
     struct AllocStat {
         uint64_t bytes = 0, count = 0, seen_bytes = 0, seen_count = 0;
         char last[160] = {};
     };
     static const char *alloc_site_name(int s) {
-        static const char *n[] = {"texture",       "msaa colour", "readback buffer", "buffer",
-                                  "buffer spare",  "kept frame",  "fitted depth",    "transient upload"};
+        static const char *n[] = {"texture",      "msaa colour",     "readback buffer",
+                                  "buffer",       "buffer spare",    "kept frame",
+                                  "fitted depth", "transient upload"};
         return s >= 0 && s < AS_COUNT ? n[s] : "?";
     }
-    void note_alloc(AllocSite site, id<MTLResource> r, uint64_t w, uint64_t h, uint64_t samples, uint64_t format) {
+    void note_alloc(AllocSite site, id<MTLResource> r, uint64_t w, uint64_t h, uint64_t samples,
+                    uint64_t format) {
         if (!r)
             return;
         const uint64_t n = (uint64_t)r.allocatedSize;
@@ -2841,8 +2902,8 @@ class Renderer final : public D9Backend {
         if (n >= (64ull << 20)) {
             ++alloc_big_;
             if (alloc_big_ <= 16 || (alloc_big_ & (alloc_big_ - 1)) == 0)
-                fprintf(stderr, "d3d9 metal: large allocation (%s): %s (%llu large so far)\n", alloc_site_name(site),
-                        a.last, (unsigned long long)alloc_big_);
+                fprintf(stderr, "d3d9 metal: large allocation (%s): %s (%llu large so far)\n",
+                        alloc_site_name(site), a.last, (unsigned long long)alloc_big_);
         }
     }
     void alloc_watch() {
@@ -2854,10 +2915,12 @@ class Renderer final : public D9Backend {
         static double stats_t = 0;
         if (stats && now - stats_t >= 5.0) {
             stats_t = now;
-            fprintf(stderr, "d3d9 metal stats: device allocated %llu MB, textures %zu, buffers %zu, fitted depth %zu "
-                            "(frame %llu)\n",
-                    (unsigned long long)(cur >> 20), textures_.size(), buffers_.size(), fitted_depth_.size(),
-                    (unsigned long long)serial_);
+            fprintf(stderr,
+                    "d3d9 metal stats: device allocated %llu MB, textures %zu, buffers %zu, fitted "
+                    "depth %zu "
+                    "(frame %llu)\n",
+                    (unsigned long long)(cur >> 20), textures_.size(), buffers_.size(),
+                    fitted_depth_.size(), (unsigned long long)serial_);
         }
         if (alloc_t0_ == 0 || now - alloc_t0_ > 2.0) {
             if (alloc_t0_ == 0)
@@ -2874,17 +2937,22 @@ class Renderer final : public D9Backend {
         if (cur < alloc_base_ + (1ull << 30))
             return;
         if (++alloc_lines_ <= 48) {
-            fprintf(stderr, "d3d9 metal: ALLOCATION GROWTH device allocated %llu MB, +%llu MB in %.2f s (frame %llu)\n",
-                    (unsigned long long)(cur >> 20), (unsigned long long)((cur - alloc_base_) >> 20), now - alloc_t0_,
+            fprintf(stderr,
+                    "d3d9 metal: ALLOCATION GROWTH device allocated %llu MB, +%llu MB in %.2f s "
+                    "(frame %llu)\n",
+                    (unsigned long long)(cur >> 20),
+                    (unsigned long long)((cur - alloc_base_) >> 20), now - alloc_t0_,
                     (unsigned long long)serial_);
             for (int i = 0; i < AS_COUNT; ++i) {
                 const AllocStat &a = alloc_[i];
                 if (a.count > a.seen_count)
-                    fprintf(stderr, "d3d9 metal:   %s: +%llu MB in %llu allocations; last %s\n", alloc_site_name(i),
+                    fprintf(stderr, "d3d9 metal:   %s: +%llu MB in %llu allocations; last %s\n",
+                            alloc_site_name(i),
                             (unsigned long long)((a.bytes - a.seen_bytes) >> 20),
                             (unsigned long long)(a.count - a.seen_count), a.last);
             }
-            fprintf(stderr, "d3d9 metal:   fitted depth cache %zu entries, textures %zu, buffers %zu\n",
+            fprintf(stderr,
+                    "d3d9 metal:   fitted depth cache %zu entries, textures %zu, buffers %zu\n",
                     fitted_depth_.size(), textures_.size(), buffers_.size());
         }
         alloc_t0_ = now;
@@ -2901,7 +2969,8 @@ class Renderer final : public D9Backend {
     void forget_fitted_depth(const Tex &t) {
         if (fitted_depth_.empty())
             return;
-        const uintptr_t a = (uintptr_t)(__bridge void *)t.texture, b = (uintptr_t)(__bridge void *)t.msaa;
+        const uintptr_t a = (uintptr_t)(__bridge void *)t.texture,
+                        b = (uintptr_t)(__bridge void *)t.msaa;
         for (auto it = fitted_depth_.begin(); it != fitted_depth_.end();)
             if (it->second.source && (it->second.source == a || it->second.source == b))
                 it = fitted_depth_.erase(it);
@@ -2954,7 +3023,8 @@ class Renderer final : public D9Backend {
           if (cb.GPUEndTime > cb.GPUStartTime) {
               const uint64_t us = (uint64_t)((cb.GPUEndTime - cb.GPUStartTime) * 1e6);
               gpu_us->fetch_add(us);
-              g_host_game_gpu_us.fetch_add(us, std::memory_order_relaxed); // Test83: the overlay's GPU
+              g_host_game_gpu_us.fetch_add(us,
+                                           std::memory_order_relaxed); // Test83: the overlay's GPU
           }
           if (cb.error)
               fprintf(stderr, "d3d9 metal: command buffer failed: %s\n",
@@ -3073,8 +3143,9 @@ class Renderer final : public D9Backend {
             if (lib)
                 fn = [lib newFunctionWithName:pixel ? @"ps_main" : @"vs_main"];
             if (fn && !warm_key.empty())
-                fn_warm_keys_[(__bridge const void *)fn] = warm_key;   // Test70: names the pipeline identity
-            else if (!fn) // Test73: a compiled shader without a warm-up cache is not a failure
+                fn_warm_keys_[(__bridge const void *)fn] =
+                    warm_key; // Test70: names the pipeline identity
+            else if (!fn)     // Test73: a compiled shader without a warm-up cache is not a failure
                 fprintf(stderr, "d3d9 metal: a %s shader failed to compile: %s\n",
                         pixel ? "pixel" : "vertex", error.localizedDescription.UTF8String);
         } else {
@@ -3223,7 +3294,8 @@ class Renderer final : public D9Backend {
         // Test70: a pipeline the warm-up created from an identical recorded identity is used as is.
         std::string spec;
         if (warm_ && warm_->pipelines_on()) {
-            auto vk = fn_warm_keys_.find((__bridge const void *)vfn), fk = fn_warm_keys_.find((__bridge const void *)ffn);
+            auto vk = fn_warm_keys_.find((__bridge const void *)vfn),
+                 fk = fn_warm_keys_.find((__bridge const void *)ffn);
             if (vk != fn_warm_keys_.end() && fk != fn_warm_keys_.end()) {
                 const PipeSpec ps = warm_spec_of(pd, vk->second, fk->second);
                 if (ps.valid() && warm_formats_ok(ps))
@@ -3346,7 +3418,9 @@ class Renderer final : public D9Backend {
         return filtered && st[7] == 2 && st[1] == 1 && st[2] == 1;
     }
     static int world_anisotropy(const uint32_t *st, int policy) {
-        const int game = (st[6] == 3 || st[5] == 3) ? int(std::max<uint32_t>(1, std::min<uint32_t>(16, st[10]))) : 1;
+        const int game = (st[6] == 3 || st[5] == 3)
+                             ? int(std::max<uint32_t>(1, std::min<uint32_t>(16, st[10])))
+                             : 1;
         if (!policy || !world_sampler(st))
             return game;
         switch (policy) {
@@ -3386,8 +3460,11 @@ class Renderer final : public D9Backend {
             static int logged = 0;
             if (stats && logged < 64) {
                 ++logged;
-                fprintf(stderr, "d3d9 metal: sampler min %u mag %u mip %u maxaniso %u -> anisotropy %d (world filtering %d) address %u/%u/%u lodmin %u\n",
-                        st[6], st[5], st[7], st[10], anisotropy, policy, st[1], st[2], st[3], st[9]);
+                fprintf(stderr,
+                        "d3d9 metal: sampler min %u mag %u mip %u maxaniso %u -> anisotropy %d "
+                        "(world filtering %d) address %u/%u/%u lodmin %u\n",
+                        st[6], st[5], st[7], st[10], anisotropy, policy, st[1], st[2], st[3],
+                        st[9]);
             }
         }
         sd.lodMinClamp = (float)st[9];
@@ -3475,22 +3552,18 @@ class Renderer final : public D9Backend {
             [enc_ setVertexBytes:bytes length:size atIndex:slot];
             return;
         }
-        id<MTLBuffer> b = transient(size);
-        memcpy((uint8_t *)b.contents + transient_used_ - size, bytes, size);
-        [enc_ setVertexBuffer:b offset:transient_used_ - size atIndex:slot];
+        const auto allocation = transient(size);
+        memcpy((uint8_t *)allocation.buffer.contents + allocation.offset, bytes, size);
+        [enc_ setVertexBuffer:allocation.buffer offset:allocation.offset atIndex:slot];
     }
-    // Space in this frame's upload buffer; returns the buffer, with the space
-    // ending at transient_used_.
-    id<MTLBuffer> transient(uint32_t size) {
-        uint32_t aligned = (size + 15) & ~15u;
-        if (!transient_ || transient_used_ + aligned > transient_.length) {
-            NSUInteger len = std::max<NSUInteger>(4u << 20, aligned);
-            transient_ = [mtl_ newBufferWithLength:len options:MTLResourceStorageModeShared];
-            note_alloc(AS_TRANSIENT, transient_, len, 1, 1, 0);
-            transient_used_ = 0;
-        }
-        transient_used_ += aligned;
-        return transient_;
+    // Reuse completed upload blocks; encoded commands retain their resources.
+    gpu::UploadArena<id<MTLBuffer>>::Allocation transient(uint32_t size) {
+        return transient_arena_.allocate(size, serial_, completed_.load(), [&](size_t length) {
+            id<MTLBuffer> buffer = [mtl_ newBufferWithLength:length
+                                                     options:MTLResourceStorageModeShared];
+            note_alloc(AS_TRANSIENT, buffer, length, 1, 1, 0);
+            return buffer;
+        });
     }
 
     d9trace::Result encode_primitives(const HostD9Draw &d) {
@@ -3550,14 +3623,14 @@ class Renderer final : public D9Backend {
                                  baseVertex:d.base_vertex
                                baseInstance:0];
             } else {
-                id<MTLBuffer> b = transient(count * isize);
-                memcpy((uint8_t *)b.contents + transient_used_ - ((count * isize + 15) & ~15u),
-                       d.inline_indices, count * isize);
+                const auto allocation = transient(count * isize);
+                memcpy((uint8_t *)allocation.buffer.contents + allocation.offset, d.inline_indices,
+                       count * isize);
                 [enc_ drawIndexedPrimitives:type
                                  indexCount:count
                                   indexType:itype
-                                indexBuffer:b
-                          indexBufferOffset:transient_used_ - ((count * isize + 15) & ~15u)];
+                                indexBuffer:allocation.buffer
+                          indexBufferOffset:allocation.offset];
             }
             return d9trace::Result::Encoded;
         }
@@ -3588,14 +3661,13 @@ class Renderer final : public D9Backend {
             list.push_back(source(i + 2));
         }
         uint32_t bytes = (uint32_t)list.size() * 4;
-        id<MTLBuffer> b = transient(bytes);
-        NSUInteger off = transient_used_ - ((bytes + 15) & ~15u);
-        memcpy((uint8_t *)b.contents + off, list.data(), bytes);
+        const auto allocation = transient(bytes);
+        memcpy((uint8_t *)allocation.buffer.contents + allocation.offset, list.data(), bytes);
         [enc_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                          indexCount:list.size()
                           indexType:MTLIndexTypeUInt32
-                        indexBuffer:b
-                  indexBufferOffset:off];
+                        indexBuffer:allocation.buffer
+                  indexBufferOffset:allocation.offset];
         return d9trace::Result::Encoded;
     }
 
@@ -3687,8 +3759,7 @@ class Renderer final : public D9Backend {
     uint32_t stream_mask_ = 0;
     bool vdesc_needs_zero_ = false;
     id<MTLBuffer> zero_ = nil;
-    id<MTLBuffer> transient_ = nil;
-    NSUInteger transient_used_ = 0;
+    gpu::UploadArena<id<MTLBuffer>> transient_arena_;
     id<MTLTexture> white_ = nil, white_cube_ = nil, white_depth_ = nil, white_volume_ = nil;
     std::vector<uint8_t> scratch_;
     std::vector<float> constants_;
@@ -3713,7 +3784,8 @@ class Renderer final : public D9Backend {
     std::unordered_map<uint32_t, Buf> buffers_;
     std::unordered_map<uint64_t, id<MTLFunction>> functions_;
     std::unordered_map<const void *, std::string> fn_warm_keys_;
-    std::set<uint64_t> msaa_logged_;   // Test70: multisampled target sizes already reported   // Test70: function -> recorded library key
+    std::set<uint64_t>
+        msaa_logged_; // Test70: multisampled target sizes already reported   // Test70: function -> recorded library key
     std::unordered_map<uint64_t, VDesc> vdescs_;
     std::unordered_map<uint64_t, id<MTLRenderPipelineState>> pipelines_;
     uint64_t shader_frame_ns_ = 0, shader_frame_max_ns_ = 0, shader_total_ns_ = 0;
@@ -3736,6 +3808,10 @@ class Renderer final : public D9Backend {
     std::set<std::string> undecoded_;
     uint32_t last_presented_ = 0, last_w_ = 0, last_h_ = 0;
     std::mutex kept_mutex_;
+    const bool keep_presented_ = [] {
+        const char *value = recomp_env("D3D9_KEEP_PRESENTED");
+        return value && strcmp(value, "1") == 0;
+    }();
     id<MTLTexture> kept_ = nil;
     id<MTLCommandBuffer> kept_cmd_ = nil;
     uint32_t kept_w_ = 0, kept_h_ = 0;

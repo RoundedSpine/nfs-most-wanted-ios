@@ -1,10 +1,11 @@
-name: iOS Haptics SDK Check
+name: iOS Metal and Haptics SDK Check
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/ios-haptics.yml
+      - kit/host/gpu/metal/**
       - kit/host/sdl/platform_ui_ios.mm
       - kit/host/controls/rumble_mailbox.h
       - kit/tools/test.py
@@ -29,5 +30,5 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install -r kit/requirements-dev.txt
-      - name: Compile iOS haptics enabled and disabled
+      - name: Compile iOS Metal and haptics enabled and disabled
         run: .venv/bin/python tools/test.py --ios-haptics
