@@ -103,6 +103,12 @@ MIT licence (see [LICENSE](LICENSE)).
 
 ## GitHub Actions iOS build
 
+The iOS workflow uses `./setup.sh GAME_DIR --prepare-ios` to prepare analysis,
+translation, and required assets without building a macOS application first.
+Local reuse checks input identities and output hashes; `--force-prepare` bypasses
+reuse. Game-derived outputs stay in ignored local directories. Actions caches
+only public tool archives, which retain their pinned SHA-256 verification.
+
 The repository includes `.github/workflows/ios.yml`. It builds the iOS target on a
 GitHub-hosted macOS runner using Xcode and uploads:
 

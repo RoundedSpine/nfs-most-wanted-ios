@@ -9,6 +9,7 @@ runtime (pinned hashes) -> analyse speed.exe once -> translate and build -> buil
 map from your files -> package dist/NFS Most Wanted Native.app. Everything stays on this Mac."""
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import platform
@@ -22,6 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "kit"
+sys.path.insert(0, str(KIT / "tools"))
+import content_cache
+import game_config
 # Not under ~/Library/Caches: Ghidra 12.1.3 cannot find its extension points when installed there.
 CACHE = Path.home() / "Library/NFSMW-Native-Setup"
 LOG = ROOT / "build/setup.log"
@@ -184,13 +188,67 @@ def find_ci(base, *parts):
     return p if p.is_file() else None
 
 
-def analysis_done():
+def analysis_done(key=None):
     inputs = ROOT / "analysis/decompiled/inputs.json"
     try:
         return json.loads(inputs.read_text()).get("executable_sha256") == PIN and \
-            (ROOT / "analysis/decompiled/speed.exe/functions.tsv").is_file()
+            analysis_exports_complete() and \
+            content_cache.valid(inputs.parent, key or analysis_key())
     except (OSError, ValueError):
         return False
+
+
+def analysis_exports_complete():
+    listings = ROOT / "analysis/decompiled/speed.exe"
+    try:
+        rows = (listings / "functions.tsv").read_text().splitlines()[1:]
+        return bool(rows) and all(
+            (listings / "functions" / ("%08x.asm" % int(row.split("\t")[0], 16))).is_file()
+            for row in rows)
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def analysis_key(ghidra_home=None, java_home=None):
+    return content_cache.fingerprint(
+        [ROOT / "tools/analyze.py", KIT / "tools/ExportProgram.java"],
+        {"exe": PIN, "ghidra": TOOLS["ghidra"]["sha256"],
+         "jdk": TOOLS["jdk"]["sha256"], "analysis": "default analyzers",
+         "custom_ghidra": str(ghidra_home.resolve()) if ghidra_home else None,
+         "custom_java": str(java_home.resolve()) if java_home else None})
+
+
+def translation_key():
+    sources = list((KIT / "tools/recomp").glob("*.py"))
+    sources += [KIT / "tools/game_config.py", KIT / "tools/build.py",
+                KIT / "tools/content_cache.py", KIT / "runtime/x86.h",
+                KIT / "tools/requirements.txt",
+                ROOT / "game.toml", ROOT / "globals.toml"]
+    modules = game_config.load(ROOT)["aux_modules"]
+    sources += [module["path"] for module in modules]
+    return content_cache.fingerprint(sources, {
+        "exe": PIN, "analysis": content_cache.files(ROOT / "analysis/decompiled"),
+        "allow_table_gaps": ALLOW_GAPS, "python": sys.version,
+        "packages": {name: importlib.metadata.version(name)
+                     for name in ("capstone", "pefile", "tomli")},
+        "auxiliary_listings": {module["key"]: content_cache.files(module["listings_path"])
+                               for module in modules}})
+
+
+def prepare_translation(force=False):
+    """Reuse only a complete, byte-validated generation with identical inputs."""
+    output = ROOT / "build/recomp/gen"
+    key = translation_key()
+    if not force and content_cache.valid(output, key) and (output / "table.c").is_file():
+        say("  translation inputs and generated files unchanged; reused")
+        return
+    run([PY, "tools/build.py", "--regenerate", "--translate-only",
+         "--allow-table-gaps", ALLOW_GAPS])
+    if not (output / "table.c").is_file():
+        fail("translation did not produce build/recomp/gen/table.c")
+    if translation_key() != key:
+        fail("translation inputs changed while generating; rerun preparation")
+    content_cache.stamp(output, key)
 
 
 def main():
@@ -201,6 +259,10 @@ def main():
     ap.add_argument("--no-pools", action="store_true", help="do not build the light pools")
     ap.add_argument("--out", type=Path, default=ROOT / "dist", help="where to write the app (default dist/)")
     ap.add_argument("--check-only", action="store_true", help="only check the game folder and speed.exe")
+    ap.add_argument("--prepare-ios", action="store_true",
+                    help="Prepare translation and game extras without building or packaging a Mac app")
+    ap.add_argument("--force-prepare", action="store_true",
+                    help="Ignore local analysis/translation reuse and regenerate inputs")
     ap.add_argument("--ghidra-home", type=Path, help="use this Ghidra 12.1.3 instead of downloading one")
     ap.add_argument("--java-home", type=Path, help="use this Java runtime (21 or later) instead of downloading one")
     args = ap.parse_args()
@@ -219,24 +281,38 @@ def main():
     link_game(game, image)
 
     say("3/7 Analysing speed.exe (once; a few minutes)")
-    if analysis_done():
+    key = analysis_key(args.ghidra_home, args.java_home)
+    # Custom installations are not attested by the pinned archive checksum;
+    # export afresh rather than assume their contents have stayed unchanged.
+    custom_tools = args.ghidra_home or args.java_home
+    if not args.force_prepare and not custom_tools and analysis_done(key):
         say("  already analysed; reused")
     else:
         java = args.java_home or fetch("jdk")
         ghidra = args.ghidra_home or fetch("ghidra")
         ghidra_natives(ghidra, java)
         run([PY, "tools/analyze.py", "--ghidra-home", ghidra, "--java-home", java])
+        if not analysis_exports_complete():
+            fail("Ghidra analysis is incomplete; missing function listings")
+        if analysis_key(args.ghidra_home, args.java_home) != key:
+            fail("analysis tools changed while exporting; rerun preparation")
+        content_cache.stamp(ROOT / "analysis/decompiled", key)
 
-    say("4/7 Translating and building")
-    run([PY, "tools/build.py", "--regenerate", "--allow-table-gaps", ALLOW_GAPS])
-    run([PY, "tools/build.py", "--target", "plugins"])
-    if not (ROOT / "build/SpeedRecomp.app/Contents/MacOS/SpeedRecomp").is_file():
-        fail("the build finished without build/SpeedRecomp.app")
+    say("4/7 Preparing translation" if args.prepare_ios else "4/7 Translating and building")
+    prepare_translation(args.force_prepare)
+    if not args.prepare_ios:
+        run([PY, "tools/build.py"])
+        run([PY, "tools/build.py", "--target", "plugins"])
+        if not (ROOT / "build/SpeedRecomp.app/Contents/MacOS/SpeedRecomp").is_file():
+            fail("the build finished without build/SpeedRecomp.app")
 
     say("5/7 Building the extras from your game")
     gen = ROOT / "build/generated"
     shutil.rmtree(gen, ignore_errors=True)
     gen.mkdir(parents=True)
+    if args.prepare_ios and (ROOT / "assets/terrain/materials-v1.png").is_file():
+        run([PY, KIT / "tools/recomp/terrain_detail.py", "--source",
+             ROOT / "assets/terrain/materials-v1.png", "--output", ROOT / "build/texture-pack"])
     if args.no_pools:
         say("  light pools: skipped (--no-pools)")
     else:
@@ -269,6 +345,9 @@ def main():
         say("  sparks and light trails: not added (put XenonEffects.tpk in your game folder's scripts folder, "
             "or pass --xenon-effects FILE)")
 
+    if args.prepare_ios:
+        say("7/7 iOS inputs ready; build with kit/tools/build.py --target ios")
+        return
     say("7/7 Packaging")
     run([PY, "tools/setup_kit/package.py", "--game", game, "--image", ROOT / "original/retail/speed.exe",
          "--generated", gen, "--out", args.out.expanduser().resolve()])

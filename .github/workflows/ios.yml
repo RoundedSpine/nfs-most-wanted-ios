@@ -95,7 +95,15 @@ jobs:
           echo "GAME_DIR=$GAME_DIR" >> "$GITHUB_ENV"
           echo "Game files verified."
 
-      - name: Set up and translate game
+      - name: Cache verified public tool archives
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/NFSMW-Native-Setup/*.zip
+            ~/Library/NFSMW-Native-Setup/*.tar.gz
+          key: nfsmw-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/setup_kit/setup.py', 'setup.sh') }}
+
+      - name: Prepare game translation and assets for iOS
         run: |
           set -euo pipefail
 
@@ -118,7 +126,7 @@ jobs:
           python3.12 --version
 
           chmod +x ./setup.sh
-          ./setup.sh "$GAME_DIR"
+          ./setup.sh "$GAME_DIR" --prepare-ios
 
           test -f build/recomp/gen/table.c || {
             echo "ERROR: Translation output missing."
