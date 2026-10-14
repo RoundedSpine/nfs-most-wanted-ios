@@ -26,6 +26,7 @@ Run checks appropriate to your change. Every suite's output belongs under ignore
 | `tools/test.py` | Setup failures, synthetic texture processing and display-mode tooling | No |
 | `tools/format.py` | Consistent formatting of handwritten native code | No |
 | `tools/test.py --compile-only` | Every native test binary this platform has compiles (macOS, Linux, Windows) | No |
+| `tools/test.py --ios-haptics` | Compile the iOS haptics bridge, enabled and disabled, with Xcode's iPhoneOS SDK | No |
 | `tools/test.py --native` | Portable suites everywhere; runtime, adapters, offscreen Metal and UI tests on macOS | Partly: `game`-labeled suites need the image |
 | `tools/test.py --mods` | Real loader/hooks/settings/native Options and replay contracts | Yes, plus translated archive |
 | `tools/test.py --gameplay` | Menu navigation, mode cycling, selection, movement and clean exit | Yes, plus translated archive |

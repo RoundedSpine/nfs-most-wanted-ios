@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,39 @@ def integration(env, game_dir, build_root):
         dict(env, RECOMP_GAME_DIR=str(game_dir), RECOMP_BUILD_ROOT=str(build_root)))
 
 
+def ios_haptics(game_dir, build_root):
+    """Compile the real iOS bridge against the SDK without translating a game."""
+    sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
+                                  text=True).strip()
+    # Use the same SDL tag as the normal build, without building SDL or FFmpeg.
+    dependencies = (ROOT / "cmake/Dependencies.cmake").read_text()
+    tag = re.search(r"FetchContent_Declare\(SDL3.*?GIT_TAG\s+(\S+)", dependencies,
+                    re.DOTALL).group(1)
+    headers = ROOT / ".tools/haptics-sdl"
+    if not headers.exists():
+        headers.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", "--depth", "1", "--branch", tag,
+             "https://github.com/libsdl-org/SDL.git", headers])
+    actual_tag = subprocess.check_output(["git", "-C", str(headers), "describe",
+                                          "--tags", "--exact-match"], text=True).strip()
+    if actual_tag != tag:
+        raise RuntimeError("The cached haptics SDL headers don't match the build's pinned tag")
+    generated = build_root / "haptics-check/generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    run([sys.executable, ROOT / "tools/gen_game_config.py", "--game-dir", game_dir,
+         "--header", generated / "game_config.h", "--cmake", generated / "game_config.cmake"])
+    command = ["xcrun", "--sdk", "iphoneos", "clang++", "-target", "arm64-apple-ios17.0",
+               "-std=c++20", "-fobjc-arc", "-fsyntax-only", "-Werror=return-type",
+               "-isysroot", sdk]
+    for directory in (headers / "include", ROOT, ROOT / "host", ROOT / "runtime", generated):
+        command += ["-I", str(directory)]
+    for disabled in (0, 1):
+        print("Checking iOS Core Haptics %s against %s" %
+              ("disabled" if disabled else "enabled", sdk), flush=True)
+        run(command + ["-DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=%d" % disabled,
+                       ROOT / "host/sdl/platform_ui_ios.mm"])
+
+
 def main():
     """Choose portable, compile-only or game-backed suites and check their prerequisites."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -161,11 +195,14 @@ def main():
     group.add_argument("--gameplay", action="store_true", help="Scripted native Options and gameplay run")
     group.add_argument("--integration", action="store_true", help="The host integration script against the game")
     group.add_argument("--compile-only", action="store_true", help="Build the native test binaries only")
+    group.add_argument("--ios-haptics", action="store_true", help="Check the iOS haptics bridge with Xcode, no game files needed")
     parser.add_argument("--preset", default=build_py.default_preset())
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",
                         help="Absolute directory holding the game.toml (default: the kit's stub game)")
     args = parser.parse_args()
+    if args.ios_haptics and platform.system() != "Darwin":
+        parser.error("The iOS haptics check requires macOS with Xcode's iPhoneOS SDK")
     if not args.game_dir.is_absolute() or not (args.game_dir / "game.toml").is_file():
         parser.error("--game-dir must be an absolute directory holding game.toml: %s" % args.game_dir)
     cfg = build_py.game_config.load(args.game_dir)
@@ -181,7 +218,9 @@ def main():
     env = probe_module().without_switches(os.environ)
     env["PY"] = sys.executable
     try:
-        if args.gameplay:
+        if args.ios_haptics:
+            ios_haptics(args.game_dir, build_root)
+        elif args.gameplay:
             gameplay(args.jobs, args.game_dir, build_root)
         elif args.mods:
             mods(args.preset, env, args.jobs, args.game_dir, build_root)

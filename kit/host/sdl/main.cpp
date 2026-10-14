@@ -22,6 +22,7 @@
 #include "../../runtime/layout.h"
 #include "../../platform/os.h"
 #include "../audio.h"
+#include "../audio/recovery_tasks.h"
 #include "../audio/sink.h"
 #include "../audio_capture.h"
 #include "../boot.h"
@@ -1113,6 +1114,7 @@ void update_editor_text_input() {
 // settled (the same reopen as after an HDR switch: host_audio_restart_output). Other devices (a controller's
 // speaker) coming and going change nothing.
 namespace {
+AudioRecoveryTasks g_audio_recovery;
 std::map<SDL_AudioDeviceID, std::string> g_audio_device_names;
 std::string g_audio_default_name, g_audio_lost_name;
 std::string audio_device_name(SDL_AudioDeviceID id) {
@@ -1145,18 +1147,20 @@ void note_audio_device_event(uint32_t type, SDL_AudioDeviceID which) {
         // (the Dolby sink resolves the default device, its streams, the AC-3 format and hog mode anew, and a new
         // IOProc). It waits until macOS has made the returned device the system output again (on wake it briefly
         // shows the built-in speakers), checked every 250 ms for at most 15 s, then 1 s for the HDMI link.
-        std::thread([name] {
+        g_audio_recovery.start([name](AudioRecoveryTasks &tasks) {
             bool back = false;
             for (int i = 0; i < 60 && !back; ++i) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                if (tasks.wait(std::chrono::milliseconds(250)))
+                    return;
                 back = audio_device_name(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK) == name;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            if (tasks.wait(std::chrono::milliseconds(1000)))
+                return;
             if (!back)
                 printf("[host] audio: '%s' is not the system output after 15 s; reopening on the current output\n",
                        name.c_str());
             host_audio_restart_output("the output device came back (sleep/wake or the TV reconnected)");
-        }).detach();
+        });
         // The returned device is the output from here on. Not the momentary system default: on wake that is the
         // built-in speakers, and remembering it lost the second sleep (an RC4 test session).
         g_audio_default_name = name;
@@ -1170,12 +1174,13 @@ void note_audio_device_event(uint32_t type, SDL_AudioDeviceID which) {
 // claim and IOProc the process held is gone, like after a sleep. The same fresh reopen, after 2 s for the service to
 // enumerate the devices again. The listener runs on a CoreAudio thread; the work runs on its own thread.
 void audio_service_restarted() {
-    std::thread([] {
+    g_audio_recovery.start([](AudioRecoveryTasks &tasks) {
         printf("[host] audio: the macOS audio service restarted; the output reopens\n");
         fflush(stdout);
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        if (tasks.wait(std::chrono::milliseconds(2000)))
+            return;
         host_audio_restart_output("the macOS audio service restarted");
-    }).detach();
+    });
 }
 } // namespace
 
@@ -1979,6 +1984,7 @@ int main(int argc, char **argv) {
         // The kit page needs a running presenter and initialized mod rows;
         // before boot, log the actionable path instead of opening a picker.
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s", game_error.c_str());
+        platform_ui_prepare_shutdown();
         SDL_Quit();
         platform_ui_process_exit(2);
 #else
@@ -2178,6 +2184,8 @@ int main(int argc, char **argv) {
         fflush(nullptr);
         _Exit(4);
     }
+    platform_ui_prepare_shutdown();
+    g_audio_recovery.stop();
     host_present_stop(); // scheduler has stopped; join outside the guest baton
     host_audio_capture_end();
     boot_report_lock();

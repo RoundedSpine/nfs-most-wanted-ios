@@ -345,6 +345,9 @@ pop_link_video(host_tests)
 pop_test_binary(host_tests)
 add_test(NAME host_tests COMMAND host_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(host_tests PROPERTIES LABELS gpu)
+add_test(NAME presenter_shutdown_timeout
+  COMMAND ${Python3_EXECUTABLE} ${HOST}/tests/check_shutdown_timeout.py $<TARGET_FILE:host_tests>)
+set_tests_properties(presenter_shutdown_timeout PROPERTIES LABELS nogame TIMEOUT 20)
 endif()
 
 # The production headless capture path with synthetic guest windows and no GPU.

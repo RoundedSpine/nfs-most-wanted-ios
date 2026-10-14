@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Serialize lifecycle audio pause/resume with output destruction, stop platform
+  haptics before SDL teardown, cancel and join delayed audio recovery workers,
+  and bound GPU retirement to avoid an indefinite shutdown hang. A GPU retirement
+  timeout ends the process without freeing resources that may still be in use.
+
+- Harden iOS continuous Core Haptics rumble: use a haptics-only engine, coalesce
+  queued requests, discard vibration across suspension, validate player operations,
+  and prevent delayed engine/player callbacks from clearing replacement players.
+  Hardware crash validation remains pending.
+
 ## 1.0.2 — change any button
 
 - **Remap your controller in the game's own menu:** Options → Controls, press R2 for the Controller page, pick an

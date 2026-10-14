@@ -2,6 +2,7 @@
 #include "../runtime/display_seam.h"
 // Worker-owned swapchain and sealed-frame mailbox, over gpu.h. No window code here.
 #include "present.h"
+#include "audio/recovery_tasks.h"
 #include "present_frame.h"
 #include "present_test.h"
 #include "performance_overlay.h"
@@ -28,6 +29,7 @@ extern "C" void host_audio_restart_output(const char *why); // weak default: run
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -262,6 +264,7 @@ struct Service : std::enable_shared_from_this<Service> {
     int hdr_display_logged = -9;
     unsigned hdr_switches_seen = 0;
     double hdr_audio_reopen_at = 0;
+    AudioRecoveryTasks audio_recovery;
     void hdr_poll() {
         if (++hdr_polls % 30 != 1 || !chain)
             return;
@@ -284,7 +287,9 @@ struct Service : std::enable_shared_from_this<Service> {
         if (hdr_audio_reopen_at > 0 && now() >= hdr_audio_reopen_at) {
             hdr_audio_reopen_at = 0;
             // Reopening blocks for a moment: not on the presenter thread.
-            std::thread([] { host_audio_restart_output("the display's HDR mode changed"); }).detach();
+            audio_recovery.start([](AudioRecoveryTasks &) {
+                host_audio_restart_output("the display's HDR mode changed");
+            });
         }
         const double strength = std::clamp(double(mods_setting_value("core.nfsmw/hdr_highlights", 60)), 0.0, 100.0) / 100;
         const double potential = device->edr_headroom(true);
@@ -1329,6 +1334,7 @@ extern "C" void host_present_stop() {
     auto s = active.load();
     if (!s)
         return;
+    s->audio_recovery.stop();
     host_gpu2d_release_device();
     {
         std::lock_guard lock(s->mutex);
@@ -1359,10 +1365,17 @@ extern "C" void host_present_stop() {
             for (auto &f : s->retiring)
                 f->prefix->done = true;
         s->sweep();
-        s->completed.wait(lock, [&] {
+        const bool retired = s->completed.wait_for(lock, std::chrono::seconds(10), [&] {
             s->sweep();
             return s->flights.empty() && s->retiring.empty() && s->pending_commands == 0;
         });
+        if (!retired) {
+            // In-flight GPU commands may still reference every retained frame.
+            // Bypass destructors rather than release those resources or hang.
+            fprintf(stderr, "presenter: GPU retirement timed out during shutdown; ending safely\n");
+            fflush(stderr);
+            std::_Exit(5);
+        }
         s->writing.reset();
         s->history_lease.reset();
         s->cached_target.reset();
