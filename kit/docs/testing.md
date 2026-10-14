@@ -185,3 +185,12 @@ The `--ios-haptics` SDK check also syntax-checks the Metal device and D3D9 rende
 `upload_arena_tests` exercises alignment and completion-owned buffer reuse without
 a Metal device. Device gameplay and Metal validation are still needed to measure
 frame time, capture behavior and upload latency under actual GPU load.
+
+`tools/test.py --ios-metal-only` configures the real iOS stub project and links
+its app and GPU backend library (video disabled). It requires macOS/Xcode, but no game installation or
+signing team. The check verifies that Vulkan/Volk/glslang targets are absent,
+SDL Vulkan is disabled, the factory has only Metal capabilities, and the GPU
+archive has no unresolved Vulkan backend symbols. The portable
+`gpu_metal_only_factory_tests` links the real factory with fake Metal functions
+and no Vulkan symbols, covering default/explicit Metal selection and rejection
+of unavailable backends. It does not execute Metal GPU work.
