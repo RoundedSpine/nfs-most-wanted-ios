@@ -19,6 +19,7 @@ claim that every path has been exercised on an iPhone.
 | Python setup | Python 3.13 selection conflicted with pinned NumPy; CI created a fake interpreter to bypass it. | One compatibility probe selects supported native Python for both system and venv paths; remove the CI shim. |
 | Game validation | Setup repeated the executable pin and required folders from game.toml; CI copied part of that validation again. | Read identity/folders from game.toml and leave archive extraction in CI, with normalization, hash and folder validation owned by setup. |
 | Migration tooling | One-shot UIKit cleanup and unsigned-build patch scripts targeted obsolete source shapes. | Remove those scripts and their source-mutating cleanup workflow. Continuous Core Haptics and unsigned builds are implemented directly. |
+| Metal readback | Private readback drained the GPU, then submitted a same-queue copy and waited again. | Fence CPU-visible reads explicitly; private readback waits only for its already ordered copy. |
 | Metal state | Stored last-frame dimensions, an in-flight boolean and a depth-match temporary had no readers. | Remove the write-only fields/temporary; keep the backbuffer identity used for HDR. |
 | Native headers | Repeated unconditional imports and an identical x86.h include in both preprocessor branches. | Remove duplicate imports and the ineffective conditional. |
 

@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Share launcher/loader SHA-256 validation, reclaim completed audio recovery
+- Remove the duplicate GPU drain before private Metal readback copies.
+  Share launcher/loader SHA-256 validation, reclaim completed audio recovery
   workers, and consolidate iOS build aliases around the canonical argument
   parser. iOS rejects unsupported Debug requests instead of silently building
   Release. Setup selects a Python version supported by pinned dependencies
