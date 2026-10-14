@@ -35,6 +35,11 @@ class BuildPyTests(unittest.TestCase):
                 configure.assert_not_called()
                 build.assert_not_called()
 
+    def test_ios_rejects_unsupported_debug_instead_of_silently_building_release(self):
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--target", "ios", "--unsigned", "--config", "Debug"],
+                                system="Darwin")
+
     def test_translate_only_requires_regeneration(self):
         with self.assertRaises(SystemExit):
             build_py.parse_args(["--translate-only"], system="Linux")

@@ -40,7 +40,6 @@
 #include "../../mods/mods_internal.h"
 #include "../midi.h"
 #include "../present.h"
-#include "../../runtime/display_seam.h"
 #include "../window_presentation.h"
 #include "keymap.h"
 #include "platform_ui.h"
@@ -73,7 +72,6 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <thread>
 #include <vector>
 
 // Win32 messages this host delivers.
@@ -415,7 +413,8 @@ void update_idle_cursor() {
     // Only once the game shows its own picture: over a launcher or settings form it draws no cursor of its own.
     // Test128: a Direct3D 9 game (NFSMW) never has a DirectDraw primary, so the arrow never hid; the GPU renderer
     // running (the device took the game's draws) counts as the game's picture too (RC5 launcher log, 2 Oct 2026).
-    const bool primary = ddraw_gdi_primary_active() || host_d9_active() != 0, focus = g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS),
+    const bool primary = ddraw_gdi_primary_active() || host_d9_active() != 0,
+               focus = g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS),
                page = mods_page_visible() || mods_controls_editing();
     const bool want = idle && primary && focus && !page && !g_close_requested;
     if (want != g_idle_hidden) {
@@ -431,7 +430,8 @@ void update_idle_cursor() {
         const uint64_t now = SDL_GetTicks();
         if (!last_ms || now - last_ms > 60000) {
             last_ms = now;
-            printf("[host] cursor: idle but shown (game picture %d, window focus %d, settings page %d, closing %d)\n",
+            printf("[host] cursor: idle but shown (game picture %d, window focus %d, settings page "
+                   "%d, closing %d)\n",
                    int(primary), int(focus), int(page), int(g_close_requested));
             fflush(stdout);
         }
@@ -1127,7 +1127,8 @@ void note_audio_device_event(uint32_t type, SDL_AudioDeviceID which) {
         if (it != g_audio_device_names.end()) {
             if (!it->second.empty() && it->second == g_audio_default_name) {
                 g_audio_lost_name = it->second;
-                printf("[host] audio: the output device '%s' went away; the output reopens when it is back\n",
+                printf("[host] audio: the output device '%s' went away; the output reopens when it "
+                       "is back\n",
                        g_audio_lost_name.c_str());
                 fflush(stdout);
             }
@@ -1138,9 +1139,12 @@ void note_audio_device_event(uint32_t type, SDL_AudioDeviceID which) {
     const std::string name = audio_device_name(which);
     if (!name.empty())
         g_audio_device_names[which] = name;
-    if (type == SDL_EVENT_AUDIO_DEVICE_ADDED && !g_audio_lost_name.empty() && name == g_audio_lost_name) {
-        printf("[host] audio: the output device '%s' is back (#%u); the output reopens once it is the system "
-               "output again\n", name.c_str(), unsigned(which));
+    if (type == SDL_EVENT_AUDIO_DEVICE_ADDED && !g_audio_lost_name.empty() &&
+        name == g_audio_lost_name) {
+        printf("[host] audio: the output device '%s' is back (#%u); the output reopens once it is "
+               "the system "
+               "output again\n",
+               name.c_str(), unsigned(which));
         fflush(stdout);
         g_audio_lost_name.clear();
         // review (2 Oct): no resume across the loss and no fixed delay alone - the reopen builds a fresh session
@@ -1157,9 +1161,11 @@ void note_audio_device_event(uint32_t type, SDL_AudioDeviceID which) {
             if (tasks.wait(std::chrono::milliseconds(1000)))
                 return;
             if (!back)
-                printf("[host] audio: '%s' is not the system output after 15 s; reopening on the current output\n",
+                printf("[host] audio: '%s' is not the system output after 15 s; reopening on the "
+                       "current output\n",
                        name.c_str());
-            host_audio_restart_output("the output device came back (sleep/wake or the TV reconnected)");
+            host_audio_restart_output(
+                "the output device came back (sleep/wake or the TV reconnected)");
         });
         // The returned device is the output from here on. Not the momentary system default: on wake that is the
         // built-in speakers, and remembering it lost the second sleep (an RC4 test session).
@@ -1183,7 +1189,6 @@ void audio_service_restarted() {
     });
 }
 } // namespace
-
 
 // One SDL event, translated into both of the input paths the game reads: the
 // DirectInput device state, and the Win32 message queue.
@@ -1384,8 +1389,9 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
         if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
-            (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && (event.gaxis.value > 12000 || event.gaxis.value < -12000)))
-            g_pointer_active_ms = 0;   // playing with the controller: hide the idle cursor now
+            (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+             (event.gaxis.value > 12000 || event.gaxis.value < -12000)))
+            g_pointer_active_ms = 0; // playing with the controller: hide the idle cursor now
         // The settings page, when it is up, is driven by the pad too. Its keys go through the
         // same filter the keyboard's do; the game meanwhile sees a pad with nothing held.
         // Open or close the settings page from the controller: the DualSense touchpad click (the game

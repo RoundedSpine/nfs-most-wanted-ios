@@ -74,26 +74,10 @@ jobs:
 
           GAME_DIR="$RUNNER_TEMP/nfsmw/game"
 
-          test -f "$GAME_DIR/speed.exe" || {
-            echo "ERROR: speed.exe missing."
-            exit 1
-          }
-
-          SPEED_SIZE="$(stat -f%z "$GAME_DIR/speed.exe")"
-          test "$SPEED_SIZE" = "6029312" || {
-            echo "ERROR: Wrong speed.exe size."
-            exit 1
-          }
-
-          for DIR in CARS FRONTEND GLOBAL SOUND TRACKS; do
-            test -d "$GAME_DIR/$DIR" || {
-              echo "ERROR: Missing $DIR."
-              exit 1
-            }
-          done
-
+          # setup.py owns executable normalization/hash checks and required
+          # folders; avoid a second, case-sensitive copy of those rules here.
           echo "GAME_DIR=$GAME_DIR" >> "$GITHUB_ENV"
-          echo "Game files verified."
+          echo "Game archive extracted; setup validates its contents next."
 
       - name: Cache verified public tool archives
         uses: actions/cache@v4
@@ -106,17 +90,6 @@ jobs:
       - name: Prepare game translation and assets for iOS
         run: |
           set -euo pipefail
-
-          # Force setup.sh to skip Python 3.13.
-          mkdir -p "$RUNNER_TEMP/python312-first"
-
-          cat > "$RUNNER_TEMP/python312-first/python3.13" <<'EOF'
-          #!/bin/sh
-          exit 1
-          EOF
-
-          chmod +x "$RUNNER_TEMP/python312-first/python3.13"
-          export PATH="$RUNNER_TEMP/python312-first:$PATH"
 
           # Prevent NumPy source compilation.
           export PIP_ONLY_BINARY=numpy
@@ -156,12 +129,7 @@ jobs:
 
           ./.venv/bin/python --version
 
-          ./.venv/bin/python kit/tools/build.py \
-            --game-dir "$GITHUB_WORKSPACE" \
-            --target ios \
-            --config Release \
-            --unsigned \
-            --no-install
+          ./github-actions-ios-build.sh --config Release
 
       - name: Package unsigned IPA
         run: |

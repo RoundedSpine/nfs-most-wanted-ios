@@ -54,7 +54,6 @@
 #include "../dx/dx.h"
 #include "../dx/host_api.h"
 #include "../mods/display_settings.h"
-#include "../mods/mods_internal.h"
 
 #include <math.h>
 #include <stdio.h>

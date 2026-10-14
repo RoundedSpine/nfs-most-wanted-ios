@@ -8,11 +8,10 @@ if [ ! -x "$PYTHON" ]; then
     echo "Missing $PYTHON. Run ./setup.sh with your own NFS MW installation first." >&2
     exit 1
 fi
-if [ -z "${RECOMP_IOS_TEAM:-}" ] && [ -z "${1:-}" ]; then
-    echo "Usage: RECOMP_IOS_TEAM=<Apple Team ID> ./ios-build.sh [build.py options]" >&2
-    echo "   or: ./ios-build.sh <Apple Team ID> [build.py options]" >&2
-    exit 2
-fi
-TEAM="${RECOMP_IOS_TEAM:-$1}"
-if [ -z "${RECOMP_IOS_TEAM:-}" ]; then shift; fi
-exec "$PYTHON" "$ROOT/kit/tools/build.py" --game-dir "$ROOT" --target ios --team "$TEAM" "$@"
+# Preserve the documented positional team ID. All option-based invocations
+# (including --unsigned and --team) go to the builder's one argument parser.
+case "${1:-}" in
+    ""|-*) ;;
+    *) TEAM=$1; shift; set -- --team "$TEAM" "$@" ;;
+esac
+exec "$PYTHON" "$ROOT/tools/build.py" --target ios "$@"

@@ -316,7 +316,6 @@ extern "C" HOST_DEFAULT void host_d3d_prepare_cpu_write(const HostD3DSurface *, 
 
 // Recorder queries stay weak even in a null-host build.
 #include "passes.h"
-#include "../platform/os.h"
 extern "C" {
 __attribute__((weak)) int host_frame_legacy(HostFrameHandle) {
     return 0;

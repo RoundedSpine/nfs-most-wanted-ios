@@ -4,6 +4,7 @@
 #include "../launcher/launcher_ui.h"
 
 #include "../../platform/os.h"
+#include "../../platform/sha256.h"
 #include "../../third_party/miniz/miniz.h"
 
 #include <cstdio>
@@ -113,7 +114,15 @@ void test_sha256() {
           "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     // Longer than one block and than the 1 MiB read buffer.
     write_file(g_scratch + "/long", std::string(1500000, 'a'));
-    CHECK(sha256_file(g_scratch + "/long").size() == 64);
+    CHECK(sha256_file(g_scratch + "/long") ==
+          "f30207a92765493dcdd80a5a2b541b3f67073c413676ab523b30c4feb12fac90");
+    // FIPS multi-block vector, split into one-byte chunks to exercise streamed
+    // updates and the extra padding block at exactly 56 bytes.
+    const std::string vector = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    recomp::Sha256 streamed;
+    for (unsigned char c : vector)
+        streamed.update(&c, 1);
+    CHECK(streamed.hex() == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
     CHECK(sha256_file(g_scratch + "/no-such-file").empty());
 }
 

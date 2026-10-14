@@ -29,9 +29,10 @@ import game_config
 # Not under ~/Library/Caches: Ghidra 12.1.3 cannot find its extension points when installed there.
 CACHE = Path.home() / "Library/NFSMW-Native-Setup"
 LOG = ROOT / "build/setup.log"
-PIN = "80774c2e5d619b4f120b48d4462896fd504c263399d203a238769cffde1d253c"
+GAME_CONFIG = game_config.load(ROOT)
+PIN = GAME_CONFIG["game"]["sha256"]
 EXE_SIZE = 6029312
-REQUIRED_DIRS = ("GLOBAL", "TRACKS", "CARS", "FRONTEND", "SOUND")
+REQUIRED_DIRS = tuple(GAME_CONFIG["setup"]["required_dirs"])
 TOOLS = {
     "ghidra": {
         "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip",

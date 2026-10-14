@@ -32,7 +32,6 @@
 #include "../d3d9_capture.h"
 #include <future>
 
-#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -2564,8 +2563,6 @@ class Renderer final : public D9Backend {
             report();
         follow_drawable();
         last_presented_ = backbuffer;
-        last_w_ = w;
-        last_h_ = h;
     }
 
     // The frame as presented, copied on the GPU when it was presented: the
@@ -2772,13 +2769,11 @@ class Renderer final : public D9Backend {
         id<MTLTexture> dz = dt ? dt->texture : nil;
         if (dz && pass_samples_ > 1)
             dz = (dt->msaa && dt->samples == pass_samples_) ? dt->msaa : nil;
-        bool depth_unmatched = false;
         if (!dz && dt && dt->texture && pass_samples_ > 1 && pass_color_[0]) {
             pass_fitted_depth_ = true;
             // A single-sampled depth buffer under a multisampled target: the
             // pass gets a depth buffer of its own that matches.
             dz = depth_for_size(dt->texture, pass_color_[0], 0, pass_samples_);
-            depth_unmatched = true;
         }
         if (dz && dz.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 && pass_color_[0] &&
             dz.width >= pass_color_[0].width >> t.color[0].level &&
@@ -2786,7 +2781,6 @@ class Renderer final : public D9Backend {
             pass_depth_ = dz;
             if (dt)
                 dt->used = serial_ + (cmd_ ? 0 : 1);
-            (void)depth_unmatched;
             rp.depthAttachment.texture = dz;
             rp.depthAttachment.loadAction = clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
             rp.depthAttachment.clearDepth = z;
@@ -3048,7 +3042,6 @@ class Renderer final : public D9Backend {
         }
         last_ = cmd_;
         cmd_ = nil;
-        in_flight_ = true;
     }
     void wait() {
         if (last_) {
@@ -3057,7 +3050,6 @@ class Renderer final : public D9Backend {
             gpu_wait_s_ += CACurrentMediaTime() - t0;
             last_ = nil;
         }
-        in_flight_ = false;
     }
     // Everything up to frame `used` has run, so the resource can be touched.
     void settle(uint64_t used) {
@@ -3724,7 +3716,6 @@ class Renderer final : public D9Backend {
     std::atomic<uint64_t> gpu_us_{0}; // GPU time of finished command buffers since the last report
     double gpu_wait_s_ = 0;           // time the game thread spent waiting for the GPU
     uint64_t report_cpu_ns_ = 0, report_instructions_ = 0;
-    bool in_flight_ = false;
     id<MTLRenderCommandEncoder> enc_ = nil;
     std::unordered_map<uint32_t, Query> queries_;
     uint32_t query_ = 0;
@@ -3806,7 +3797,7 @@ class Renderer final : public D9Backend {
     uint64_t report_frames_ = 0, report_draws_ = 0;
     std::map<std::string, uint64_t> skips_;
     std::set<std::string> undecoded_;
-    uint32_t last_presented_ = 0, last_w_ = 0, last_h_ = 0;
+    uint32_t last_presented_ = 0;
     std::mutex kept_mutex_;
     const bool keep_presented_ = [] {
         const char *value = recomp_env("D3D9_KEEP_PRESENTED");

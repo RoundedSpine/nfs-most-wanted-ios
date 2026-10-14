@@ -439,6 +439,8 @@ def parse_args(argv, system=None):
         parser.error("--push-game requires --target android without --no-install")
     if args.target == "ios" and not args.stub and not args.team and not args.unsigned:
         parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
+    if args.target == "ios" and args.config != "Release":
+        parser.error("iOS requires --config Release; unoptimized translation can overflow the guest stack")
     if args.stub and (args.config == "Debug" or args.regenerate):
         parser.error("--stub cannot be combined with --config Debug or --regenerate")
     if not args.game_dir.is_absolute():
