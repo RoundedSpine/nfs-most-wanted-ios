@@ -1738,6 +1738,9 @@ extern "C" int32_t host_audio_is_playing(int32_t id) {
 }
 
 void host_audio_pause(bool paused) {
+    // Lifecycle notifications can race output replacement or shutdown.
+    // Hold the same lifetime lock as stop/reset until pause has returned.
+    std::lock_guard<std::mutex> api(g_api_mutex);
     if (g_sink)
         g_sink->pause(paused);
 }

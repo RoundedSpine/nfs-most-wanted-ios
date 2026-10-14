@@ -49,6 +49,10 @@ bool platform_ui_pointer_capture_supported();
 // developer's desktop, 0 on a player's tablet.
 int platform_ui_default_overlay();
 
+// Invalidate platform callbacks and stop device haptics before window/audio
+// destruction and SDL_Quit. Idempotent; called after guest workers have stopped.
+void platform_ui_prepare_shutdown();
+
 // The guest has exited and the host has torn down: a desktop process returns
 // from main; iOS and Android end the process after SDL_Quit.
 void platform_ui_process_exit(int code);

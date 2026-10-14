@@ -21,6 +21,7 @@
 //     checked against pixels read back from the target
 //   * the audio mixer's conversions
 #include "../present.h"
+#include "../audio/recovery_tasks.h"
 #include "../input.h"
 #include "../input_gate.h"
 #include "../window_presentation.h"
@@ -6506,6 +6507,28 @@ static void test_presenter_history_keeps_target_lease() {
     CHECK(after_transition.world == first.world);
     host_present_stop();
 }
+static void test_audio_recovery_shutdown() {
+    AudioRecoveryTasks tasks;
+    std::atomic<bool> entered{false}, cancelled{false}, restarted{false};
+    CHECK(tasks.start([&](AudioRecoveryTasks &owner) {
+        entered.store(true, std::memory_order_release);
+        if (owner.wait(std::chrono::seconds(3)))
+            cancelled.store(true, std::memory_order_release);
+        else
+            restarted.store(true, std::memory_order_release);
+    }));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!entered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    CHECK(entered.load(std::memory_order_acquire));
+    tasks.stop();
+    CHECK(cancelled.load(std::memory_order_acquire));
+    CHECK(!restarted.load(std::memory_order_acquire));
+    CHECK(!tasks.start([&](AudioRecoveryTasks &) { restarted.store(true); }));
+    tasks.stop(); // repeat cleanup never restarts or double-joins a worker
+    CHECK(!restarted.load(std::memory_order_acquire));
+}
+
 static void test_presenter_shutdown_cancels_without_counting() {
     host_present_test_begin(false);
     host_present_test_seal(1);
@@ -7309,6 +7332,7 @@ static void test_presentation_service() {
     test_presenter_layout_and_transitions();
     test_presenter_history_keeps_target_lease();
     test_presenter_shutdown_cancels_without_counting();
+    test_audio_recovery_shutdown();
     test_presenter_migration_cancels_old_drawable();
 }
 
@@ -11288,6 +11312,16 @@ static void test_d3d9_trace_capture() {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--shutdown-missing-completion")) {
+        host_present_test_begin();
+        (void)host_present_acquire_target(640, 480, 640, 480);
+        // This is the real prefix ownership path, with its GPU callback
+        // deliberately withheld. Shutdown must not release its resources.
+        if (!host_present_prefix_begin())
+            return 2;
+        host_present_stop();
+        return 3; // an incomplete command must not report successful teardown
+    }
     if (argc == 2 && !strcmp(argv[1], "--capture-overlay")) {
         test_native_overlay_pixels();
         printf("capture overlay: %d checks, %d failures\n", g_checks, g_failures);

@@ -222,6 +222,12 @@ int platform_ui_default_overlay() {
 #endif
 }
 
+void platform_ui_prepare_shutdown() {
+    // Desktop has no device motor. Android stops its vibration through JNI
+    // while SDL's activity/JNI context is still available.
+    platform_ui_device_rumble(0, 0);
+}
+
 void platform_ui_process_exit(int code) {
 #ifdef __ANDROID__
     // main has called SDL_Quit and destroyed its window. End the process:

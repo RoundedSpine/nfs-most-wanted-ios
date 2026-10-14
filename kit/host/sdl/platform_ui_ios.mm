@@ -29,6 +29,8 @@ namespace fs = std::filesystem;
 namespace {
 
 void haptics_lifecycle(bool active, bool terminating = false);
+std::atomic<bool> g_shutdown_prepared{false};
+std::atomic<bool> g_lifecycle_watching{false};
 
 std::string bundle_dir() {
     char path[4096];
@@ -268,6 +270,8 @@ namespace {
 // place the background transition can be acted on before iOS freezes the
 // process.
 bool lifecycle_watch(void *, SDL_Event *e) {
+    if (g_shutdown_prepared.load(std::memory_order_acquire))
+        return true;
     platform_ui_handle_lifecycle(*e);
     return true;
 }
@@ -275,10 +279,8 @@ bool lifecycle_watch(void *, SDL_Event *e) {
 
 SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
                                       SDL_WindowFlags surface_flag, int *window_mode) {
-    static bool watching = false;
-    if (!watching) {
+    if (!g_lifecycle_watching.exchange(true, std::memory_order_acq_rel)) {
         SDL_AddEventWatch(lifecycle_watch, nullptr);
-        watching = true;
     }
     SDL_Window *w = SDL_CreateWindow(
         title, 0, 0, surface_flag | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -311,7 +313,7 @@ bool platform_ui_handle_lifecycle(const SDL_Event &e) {
         host_present_suspend(false);
         return true;
     case SDL_EVENT_TERMINATING:
-        haptics_lifecycle(false, true);
+        platform_ui_prepare_shutdown();
         fprintf(stderr, "[ios] terminating\n");
         host_present_suspend(true);
         host_audio_pause(true);
@@ -338,7 +340,7 @@ int platform_ui_default_overlay() {
 }
 
 void platform_ui_process_exit(int code) {
-    haptics_lifecycle(false, true);
+    platform_ui_prepare_shutdown();
     // UIApplicationMain never returns, so the game's own Exit would leave its
     // last frame on the screen; the game asked to end, and this ends it.
     fprintf(stderr, "[ios] the game exited (%d); ending the app\n", code);
@@ -400,7 +402,11 @@ void shutdown_haptic_engine() {
     g_engine_stopping = true;
     @try {
         [g_haptic_engine stopWithCompletionHandler:^(NSError *error) {
+          if (g_shutdown_prepared.load(std::memory_order_acquire))
+              return;
           dispatch_async(dispatch_get_main_queue(), ^{
+            if (g_shutdown_prepared.load(std::memory_order_acquire))
+                return;
             g_engine_stopping = false;
             if (error)
                 haptic_error("engine shutdown", error);
@@ -441,6 +447,8 @@ CHHapticEngine *haptic_engine() {
     // up the engine's audio event path and reduce haptic startup latency.
     engine.playsHapticsOnly = YES;
     engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+      if (g_shutdown_prepared.load(std::memory_order_acquire))
+          return;
       g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
       fprintf(stderr, "[ios] Core Haptics engine stopped: %ld\n", (long)reason);
       dispatch_async(dispatch_get_main_queue(), ^{
@@ -448,6 +456,8 @@ CHHapticEngine *haptic_engine() {
       });
     };
     engine.resetHandler = ^{
+      if (g_shutdown_prepared.load(std::memory_order_acquire))
+          return;
       g_engine_reset_epoch.fetch_add(1, std::memory_order_acq_rel);
       g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
       fprintf(stderr, "[ios] Core Haptics engine reset\n");
@@ -552,6 +562,8 @@ void apply_device_rumble(uint16_t strength) {
     player.loopEnabled = YES;
     const uint64_t generation = ++g_player_generation;
     player.completionHandler = ^(NSError *completion_error) {
+      if (g_shutdown_prepared.load(std::memory_order_acquire))
+          return;
       dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != g_player_generation)
             return;
@@ -625,6 +637,47 @@ void haptics_lifecycle(bool active, bool terminating) {
         dispatch_async(dispatch_get_main_queue(), update);
 }
 } // namespace
+
+void platform_ui_prepare_shutdown() {
+    if (g_shutdown_prepared.exchange(true, std::memory_order_acq_rel))
+        return;
+    g_rumble_mailbox.terminate();
+    if (g_lifecycle_watching.exchange(false, std::memory_order_acq_rel))
+        SDL_RemoveEventWatch(lifecycle_watch, nullptr);
+    void (^cleanup)(void) = ^{
+      @try {
+          // Remove future engine notifications before initiating stop. Already
+          // queued drains see a permanently terminated mailbox.
+          g_haptic_engine.stoppedHandler = nil;
+          g_haptic_engine.resetHandler = nil;
+          g_rumble_player.completionHandler = nil;
+          stop_rumble_player();
+          shutdown_haptic_engine();
+          g_tap_generator = nil;
+      } @catch (NSException *exception) {
+          fprintf(stderr, "[ios] Core Haptics shutdown exception: %s\n",
+                  exception.reason.UTF8String);
+          forget_rumble_player();
+          shutdown_haptic_engine();
+      }
+    };
+    if (NSThread.isMainThread) {
+        cleanup();
+    } else {
+        // Do not free SDL/UI resources ahead of main-queue cleanup. A bound
+        // avoids deadlocking if the main queue cannot service this request.
+        dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_main_queue(), ^{
+          cleanup();
+          dispatch_semaphore_signal(ready);
+        });
+        if (dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC))) {
+            fprintf(stderr, "[ios] main queue did not acknowledge shutdown; ending safely\n");
+            fflush(stderr);
+            _Exit(6);
+        }
+    }
+}
 
 void platform_ui_haptic_tap() {
     dispatch_async(dispatch_get_main_queue(), ^{
