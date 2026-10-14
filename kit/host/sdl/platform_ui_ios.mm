@@ -7,6 +7,7 @@
 #include "../../platform/os.h"
 #include "../../runtime/layout.h"
 #include "../audio.h"
+#include "../controls/rumble_mailbox.h"
 #include "../launcher/launcher_sdl.h"
 #include "../present.h"
 #include "game_config.h"
@@ -17,6 +18,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <stdio.h>
@@ -25,6 +27,8 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+void haptics_lifecycle(bool active, bool terminating = false);
 
 std::string bundle_dir() {
     char path[4096];
@@ -286,11 +290,13 @@ SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
 bool platform_ui_handle_lifecycle(const SDL_Event &e) {
     switch (e.type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        haptics_lifecycle(false);
         fprintf(stderr, "[ios] will enter background: suspending presentation and audio\n");
         host_present_suspend(true);
         host_audio_pause(true);
         return true;
     case SDL_EVENT_DID_ENTER_BACKGROUND:
+        haptics_lifecycle(false);
         fprintf(stderr, "[ios] did enter background\n");
         host_present_suspend(true);
         host_audio_pause(true);
@@ -299,11 +305,13 @@ bool platform_ui_handle_lifecycle(const SDL_Event &e) {
         fprintf(stderr, "[ios] will enter foreground\n");
         return true;
     case SDL_EVENT_DID_ENTER_FOREGROUND:
+        haptics_lifecycle(true);
         fprintf(stderr, "[ios] did enter foreground: resuming audio and presentation\n");
         host_audio_pause(false);
         host_present_suspend(false);
         return true;
     case SDL_EVENT_TERMINATING:
+        haptics_lifecycle(false, true);
         fprintf(stderr, "[ios] terminating\n");
         host_present_suspend(true);
         host_audio_pause(true);
@@ -330,6 +338,7 @@ int platform_ui_default_overlay() {
 }
 
 void platform_ui_process_exit(int code) {
+    haptics_lifecycle(false, true);
     // UIApplicationMain never returns, so the game's own Exit would leave its
     // last frame on the screen; the game asked to end, and this ends it.
     fprintf(stderr, "[ios] the game exited (%d); ending the app\n", code);
@@ -338,51 +347,259 @@ void platform_ui_process_exit(int code) {
 }
 
 // ---------------------------------------------------------------------------
-// Haptics: a light impact tick for on-screen control presses, and a Core
-// Haptics continuous player standing in for game rumble on a device with no
-// controller. Both must run on the main thread.
+// Core Haptics device rumble. Player/engine objects belong to the main queue;
+// callback threads publish invalidation epochs, never clear a newer player.
 // ---------------------------------------------------------------------------
 namespace {
-UIImpactFeedbackGenerator *g_tap_generator;        // prepared once, reused for every tap
-CHHapticEngine *g_haptic_engine;                   // created once, started lazily
-id<CHHapticAdvancedPatternPlayer> g_rumble_player; // the current 30 s rumble, or nil
+UIImpactFeedbackGenerator *g_tap_generator;
+CHHapticEngine *g_haptic_engine;
+id<CHHapticAdvancedPatternPlayer> g_rumble_player;
+controls::RumbleMailbox g_rumble_mailbox;
+std::atomic<uint64_t> g_engine_epoch{0};
+uint64_t g_seen_engine_epoch = 0;
+uint64_t g_player_generation = 0;
+bool g_engine_running = false;
+bool g_haptic_failed = false;
+const char *g_haptic_stage = "idle";
+
+void forget_rumble_player() {
+    g_rumble_player = nil;
+    ++g_player_generation;
+}
+
+// May be called by a queued callback after a newer player has started. Only
+// invalidate when its engine epoch is actually newer than the observed epoch.
+void reconcile_haptic_engine() {
+    const uint64_t epoch = g_engine_epoch.load(std::memory_order_acquire);
+    if (epoch == g_seen_engine_epoch)
+        return;
+    g_seen_engine_epoch = epoch;
+    g_engine_running = false;
+    g_haptic_failed = false;
+    forget_rumble_player();
+}
+
+void haptic_error(const char *operation, NSError *error) {
+    fprintf(stderr, "[ios] Core Haptics %s failed: %s (%ld)\n", operation,
+            error ? error.localizedDescription.UTF8String : "no error details",
+            error ? (long)error.code : 0L);
+}
+
+// Do not repeatedly call a failed framework object on every guest frame.
+// An engine reset or foreground transition permits a fresh attempt.
+void fail_haptic_session(const char *operation, NSError *error) {
+    haptic_error(operation, error);
+    g_haptic_failed = true;
+    g_engine_running = false;
+    forget_rumble_player();
+}
 
 bool device_supports_haptics() {
     static const bool supported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
     return supported;
 }
 
-// The engine, created on first use. A stop or reset (background, audio
-// session interruption) drops the player, since it dies with the engine.
 CHHapticEngine *haptic_engine() {
-    if (!g_haptic_engine) {
-        NSError *error = nil;
-        g_haptic_engine = [[CHHapticEngine alloc] initAndReturnError:&error];
-        if (error) {
-            fprintf(stderr, "[ios] CHHapticEngine init failed: %s\n",
-                    error.localizedDescription.UTF8String);
-            return nil;
-        }
-        // Core Haptics calls both handlers on its own background queue; every
-        // other read/write of g_rumble_player runs on the main queue (the
-        // functions below), so hop there before touching it.
-        g_haptic_engine.stoppedHandler = ^(CHHapticEngineStoppedReason) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            g_rumble_player = nil;
-          });
-        };
-        g_haptic_engine.resetHandler = ^{
-          dispatch_async(dispatch_get_main_queue(), ^{
-            g_rumble_player = nil;
-          });
-        };
+    if (g_haptic_engine)
+        return g_haptic_engine;
+    g_haptic_stage = "engine initialization";
+    NSError *error = nil;
+    CHHapticEngine *engine = [[CHHapticEngine alloc] initAndReturnError:&error];
+    if (!engine || error) {
+        fail_haptic_session(g_haptic_stage, error);
+        return nil;
     }
-    return g_haptic_engine;
+    // These patterns contain no audio. Set before startup to avoid bringing
+    // up the engine's audio event path and reduce haptic startup latency.
+    engine.playsHapticsOnly = YES;
+    engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) {
+      g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
+      fprintf(stderr, "[ios] Core Haptics engine stopped: %ld\n", (long)reason);
+      dispatch_async(dispatch_get_main_queue(), ^{
+        reconcile_haptic_engine();
+      });
+    };
+    engine.resetHandler = ^{
+      g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
+      fprintf(stderr, "[ios] Core Haptics engine reset\n");
+      dispatch_async(dispatch_get_main_queue(), ^{
+        reconcile_haptic_engine();
+      });
+    };
+    g_haptic_engine = engine;
+    return engine;
+}
+
+void stop_rumble_player() {
+    // Keep a strong local reference until stop completes; clear ownership
+    // first so a delayed completion cannot discard the next player.
+    id<CHHapticAdvancedPatternPlayer> player = g_rumble_player;
+    forget_rumble_player();
+    if (!player || !g_engine_running)
+        return;
+    NSError *error = nil;
+    g_haptic_stage = "player stop";
+    if (![player stopAtTime:CHHapticTimeImmediate error:&error] || error)
+        fail_haptic_session(g_haptic_stage, error);
+}
+
+// Preserve continuous Core Haptics rumble rather than substitute tap feedback.
+// Framework calls are serialized here and every result is checked.
+void apply_device_rumble(uint16_t strength) {
+    reconcile_haptic_engine();
+    if (g_haptic_failed || !device_supports_haptics())
+        return;
+    if (!strength) {
+        stop_rumble_player();
+        return;
+    }
+    NSError *error = nil;
+    const float intensity = strength / 65535.0f;
+    if (g_rumble_player) {
+        CHHapticDynamicParameter *parameter = [[CHHapticDynamicParameter alloc]
+            initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
+                          value:intensity
+                   relativeTime:0];
+        g_haptic_stage = "player intensity update";
+        if (![g_rumble_player sendParameters:@[ parameter ]
+                                      atTime:CHHapticTimeImmediate
+                                       error:&error] ||
+            error)
+            fail_haptic_session(g_haptic_stage, error);
+        return;
+    }
+
+    CHHapticEngine *engine = haptic_engine();
+    if (!engine)
+        return;
+    const uint64_t epoch = g_engine_epoch.load(std::memory_order_acquire);
+    if (!g_engine_running) {
+        g_haptic_stage = "engine start";
+        if (![engine startAndReturnError:&error] || error) {
+            fail_haptic_session(g_haptic_stage, error);
+            return;
+        }
+        if (epoch != g_engine_epoch.load(std::memory_order_acquire)) {
+            reconcile_haptic_engine();
+            return;
+        }
+        g_engine_running = true;
+    }
+    CHHapticEventParameter *base_intensity =
+        [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity
+                                                      value:1.0f];
+    CHHapticEventParameter *sharpness =
+        [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness
+                                                      value:0.3f];
+    constexpr NSTimeInterval duration = 30.0;
+    CHHapticEvent *event =
+        [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
+                                      parameters:@[ base_intensity, sharpness ]
+                                    relativeTime:0
+                                        duration:duration];
+    // The base intensity is 1; initial and later controls use the same scale.
+    CHHapticDynamicParameter *initial_intensity = [[CHHapticDynamicParameter alloc]
+        initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
+                      value:intensity
+               relativeTime:0];
+    g_haptic_stage = "pattern creation";
+    CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ event ]
+                                                            parameters:@[ initial_intensity ]
+                                                                 error:&error];
+    if (!pattern || error) {
+        fail_haptic_session(g_haptic_stage, error);
+        return;
+    }
+    g_haptic_stage = "player creation";
+    id<CHHapticAdvancedPatternPlayer> player = [engine createAdvancedPlayerWithPattern:pattern
+                                                                                 error:&error];
+    if (!player || error) {
+        fail_haptic_session(g_haptic_stage, error);
+        return;
+    }
+    // Loop while the guest requests rumble, instead of messaging a cached
+    // player after its 30-second event has finished.
+    player.loopEnd = duration;
+    player.loopEnabled = YES;
+    const uint64_t generation = ++g_player_generation;
+    player.completionHandler = ^(NSError *completion_error) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (generation != g_player_generation)
+            return;
+        forget_rumble_player();
+        if (completion_error)
+            fail_haptic_session("player completion", completion_error);
+      });
+    };
+    g_haptic_stage = "player start";
+    if (![player startAtTime:CHHapticTimeImmediate error:&error] || error) {
+        fail_haptic_session(g_haptic_stage, error);
+        return;
+    }
+    if (epoch != g_engine_epoch.load(std::memory_order_acquire)) {
+        reconcile_haptic_engine();
+        return;
+    }
+    g_rumble_player = player;
+}
+
+// Yield between batches; at most one queued drain owns the latest request.
+// A stop published during a framework call is processed before ownership ends.
+void drain_device_rumble() {
+    const auto request = g_rumble_mailbox.latest();
+    if (request.active &&
+        UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+        @try {
+            apply_device_rumble(request.strength);
+        } @catch (NSException *exception) {
+            fprintf(stderr, "[ios] Core Haptics exception during %s: %s: %s\n", g_haptic_stage,
+                    exception.name.UTF8String, exception.reason.UTF8String);
+            g_haptic_failed = true;
+            g_engine_running = false;
+            forget_rumble_player();
+        }
+    }
+    if (g_rumble_mailbox.finish(request.sequence))
+        dispatch_async(dispatch_get_main_queue(), ^{
+          drain_device_rumble();
+        });
+}
+
+// The watcher can invalidate requests immediately; UIKit objects remain main
+// queue owned. Old requests cannot resume after returning from the background.
+void haptics_lifecycle(bool active, bool terminating) {
+    if (terminating)
+        g_rumble_mailbox.terminate();
+    else
+        g_rumble_mailbox.set_active(active);
+    void (^update)(void) = ^{
+      @try {
+          reconcile_haptic_engine();
+          if (!active) {
+              stop_rumble_player();
+              g_tap_generator = nil;
+          } else {
+              g_haptic_failed = false;
+          }
+      } @catch (NSException *exception) {
+          fprintf(stderr, "[ios] Core Haptics lifecycle exception: %s\n",
+                  exception.reason.UTF8String);
+          g_haptic_failed = true;
+          forget_rumble_player();
+      }
+    };
+    if (NSThread.isMainThread)
+        update();
+    else
+        dispatch_async(dispatch_get_main_queue(), update);
 }
 } // namespace
 
 void platform_ui_haptic_tap() {
     dispatch_async(dispatch_get_main_queue(), ^{
+      if (!g_rumble_mailbox.latest().active ||
+          UIApplication.sharedApplication.applicationState != UIApplicationStateActive)
+          return;
       if (!g_tap_generator) {
           g_tap_generator =
               [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
@@ -396,58 +613,10 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #if defined(NFSMW_DISABLE_DEVICE_CORE_HAPTICS) && NFSMW_DISABLE_DEVICE_CORE_HAPTICS
     (void)low;
     (void)high;
-    return;
 #else
-    const float intensity = std::max(low, high) / 65535.0f;
-    dispatch_async(dispatch_get_main_queue(), ^{
-      if (!device_supports_haptics())
-          return;
-      if (intensity <= 0.0f) {
-          [g_rumble_player cancelAndReturnError:nil];
-          g_rumble_player = nil;
-          return;
-      }
-      NSError *error = nil;
-      if (g_rumble_player) {
-          // Already rumbling: retune it in place rather than restart it.
-          CHHapticDynamicParameter *param = [[CHHapticDynamicParameter alloc]
-              initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
-                            value:intensity
-                     relativeTime:0];
-          [g_rumble_player sendParameters:@[ param ] atTime:CHHapticTimeImmediate error:&error];
-          if (!error)
-              return;
-          g_rumble_player = nil; // the player died under us; fall through and rebuild it
-      }
-      CHHapticEngine *engine = haptic_engine();
-      if (!engine)
-          return;
-      [engine startAndReturnError:&error];
-      if (error)
-          return;
-      CHHapticEventParameter *intensity_param = [[CHHapticEventParameter alloc]
-          initWithParameterID:CHHapticEventParameterIDHapticIntensity
-                        value:intensity];
-      CHHapticEventParameter *sharpness_param = [[CHHapticEventParameter alloc]
-          initWithParameterID:CHHapticEventParameterIDHapticSharpness
-                        value:0.3f];
-      CHHapticEvent *event =
-          [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
-                                        parameters:@[ intensity_param, sharpness_param ]
-                                      relativeTime:0
-                                          duration:30.0];
-      CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ event ]
-                                                              parameters:@[]
-                                                                   error:&error];
-      if (error)
-          return;
-      id<CHHapticAdvancedPatternPlayer> player = [engine createAdvancedPlayerWithPattern:pattern
-                                                                                   error:&error];
-      if (error || !player)
-          return;
-      [player startAtTime:CHHapticTimeImmediate error:&error];
-      if (!error)
-          g_rumble_player = player;
-    });
+    if (g_rumble_mailbox.publish(std::max(low, high)))
+        dispatch_async(dispatch_get_main_queue(), ^{
+          drain_device_rumble();
+        });
 #endif
 }

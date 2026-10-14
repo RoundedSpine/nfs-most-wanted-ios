@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Harden iOS continuous Core Haptics rumble: use a haptics-only engine, coalesce
+  queued requests, discard vibration across suspension, validate player operations,
+  and prevent delayed engine/player callbacks from clearing replacement players.
+  Hardware crash validation remains pending.
+
 ## 1.0.2 — change any button
 
 - **Remap your controller in the game's own menu:** Options → Controls, press R2 for the Controller page, pick an

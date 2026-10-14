@@ -14,6 +14,7 @@
 #include "../controls/pad_art.h"
 #include "../controls/raster.h"
 #include "../controls/router.h"
+#include "../controls/rumble_mailbox.h"
 #include "../controls/vpad.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
@@ -2011,6 +2012,41 @@ static void test_binding_release_all_latches_still_held_buttons() {
 // The rumble decision's whole truth table: a connected controller always
 // wins (it has its own motors), the device motor only stands in when there
 // is no controller, and neither leaves nothing to rumble.
+static void test_rumble_mailbox_stop_and_lifecycle() {
+    RumbleMailbox mailbox;
+    CHECK(mailbox.publish(100));
+    for (uint16_t strength = 101; strength < 1000; ++strength)
+        CHECK(!mailbox.publish(strength)); // no main-queue backlog
+    const auto running = mailbox.latest();
+    CHECK(running.active && running.strength == 999);
+    CHECK(!mailbox.publish(0));              // stop arriving during a framework call
+    CHECK(mailbox.finish(running.sequence)); // ownership must not be lost
+    const auto stop = mailbox.latest();
+    CHECK(stop.strength == 0);
+    CHECK(!mailbox.finish(stop.sequence));
+
+    CHECK(mailbox.publish(65535));
+    mailbox.set_active(false);
+    CHECK(!mailbox.publish(65535));
+    const auto suspended = mailbox.latest();
+    CHECK(!suspended.active && suspended.strength == 0);
+    mailbox.set_active(true);
+    const auto resumed = mailbox.latest();
+    CHECK(resumed.active && resumed.strength == 0); // no stale vibration
+    CHECK(mailbox.finish(suspended.sequence));
+    CHECK(!mailbox.publish(100)); // the old drain still owns the slot
+    const auto fresh = mailbox.latest();
+    CHECK(fresh.active && fresh.strength == 100);
+    CHECK(!mailbox.finish(fresh.sequence));
+    CHECK(mailbox.publish(200)); // drain can be reacquired
+    mailbox.terminate();
+    mailbox.set_active(true);
+    CHECK(!mailbox.publish(300)); // foreground cannot revive termination
+    const auto terminated = mailbox.latest();
+    CHECK(!terminated.active && terminated.strength == 0);
+    CHECK(!mailbox.finish(terminated.sequence));
+}
+
 static void test_rumble_sink_truth_table() {
     CHECK(rumble_sink(true, true) == RumbleSink::Controller);
     CHECK(rumble_sink(true, false) == RumbleSink::Controller);
@@ -4291,6 +4327,7 @@ int main(int argc, char **argv) {
     test_binding_aliased_mouse_button_is_ref_counted();
     test_binding_release_all_latches_still_held_buttons();
     test_rumble_sink_truth_table();
+    test_rumble_mailbox_stop_and_lifecycle();
     test_controls_area_below_the_game();
     test_router_claims_the_controls_area();
     test_make_view_carries_the_controls_area();
