@@ -6,6 +6,10 @@ on:
     paths:
       - .github/workflows/ios-haptics.yml
       - kit/host/gpu/metal/**
+      - kit/host/gpu/gpu_factory.cpp
+      - kit/host/gpu/gpu_factory.h
+      - kit/host/gpu/CMakeLists.txt
+      - kit/cmake/Dependencies.cmake
       - kit/host/sdl/platform_ui_ios.mm
       - kit/host/controls/rumble_mailbox.h
       - kit/tools/test.py
@@ -16,7 +20,7 @@ permissions:
 jobs:
   haptics-sdk:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -32,3 +36,5 @@ jobs:
           .venv/bin/python -m pip install -r kit/requirements-dev.txt
       - name: Compile iOS Metal and haptics enabled and disabled
         run: .venv/bin/python tools/test.py --ios-haptics
+      - name: Link Metal-only iOS stub app and verify GPU archive
+        run: .venv/bin/python tools/test.py --ios-metal-only --jobs 4

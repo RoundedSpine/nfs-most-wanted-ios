@@ -6,7 +6,8 @@
 namespace gpu {
 
 // Metal on Apple platforms, Vulkan elsewhere. RECOMP_GPU_BACKEND=metal|vulkan
-// selects one explicitly; an unavailable choice yields nullptr.
+// selects a compiled backend explicitly; an unavailable choice yields nullptr.
+// iOS builds include only Metal; macOS retains optional Vulkan.
 std::unique_ptr<Device> create_default_device();
 // The backend create_default_device() would build: "metal", "vulkan" or "none".
 const char *default_backend_name();

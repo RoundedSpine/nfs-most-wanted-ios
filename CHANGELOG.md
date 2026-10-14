@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Build iOS with Metal only: omit the Vulkan backend and Volk loader, disable
+  SDL Vulkan support, and restrict backend selection to compiled capabilities.
+  Other native platforms keep Vulkan support. Verify the iOS target graph and
+  GPU archive without requiring game assets.
+
 - Remove the duplicate GPU drain before private Metal readback copies.
   Share launcher/loader SHA-256 validation, reclaim completed audio recovery
   workers, and consolidate iOS build aliases around the canonical argument

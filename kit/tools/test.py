@@ -24,7 +24,7 @@ build_py = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_py)
 
 PORTABLE_TESTS = [
-    "tests/test_content_cache.py", "tests/test_ios_prepare.py",
+    "tests/test_content_cache.py", "tests/test_ios_prepare.py", "tests/test_ios_backend_check.py",
     "tests/test_setup.py", "tests/test_build_py.py", "tests/test_game_config.py", "tests/test_game_literals.py",
     "tests/test_gen_stub_translation.py", "tests/test_stage_game_files.py",
     "tests/test_extract_icon.py", "tests/test_web_launcher.py",
@@ -190,6 +190,53 @@ def ios_haptics(game_dir, build_root):
                        ROOT / "host/sdl/platform_ui_ios.mm"])
 
 
+def verify_ios_sdl_cache(cache):
+    """CMake dependent options may use INTERNAL rather than BOOL when disabled."""
+    values = {}
+    for name in ("SDL_VULKAN", "SDL_RENDER_VULKAN"):
+        entry = re.search(r"^" + re.escape(name) + r":[^=\n]+=([^\n]*)$", cache, re.MULTILINE)
+        values[name] = entry.group(1).strip().upper() if entry else None
+    if any(value not in ("OFF", "FALSE", "NO", "0") for value in values.values()):
+        raise RuntimeError("SDL Vulkan support must be disabled in the iOS build: %s" % values)
+
+
+def ios_metal_only(game_dir, build_root, jobs):
+    """Link the iOS stub app; reject Vulkan targets and GPU archive references."""
+    directory = build_root / "metal-only-check/cmake"
+    query = directory / ".cmake/api/v1/query"
+    query.mkdir(parents=True, exist_ok=True)
+    (query / "codemodel-v2").touch()
+    build_py.configure("ios-stub", build_py.game_defines(game_dir, build_root) +
+                       ["-DRECOMP_VIDEO=OFF"], build_dir=directory)
+    reply = directory / ".cmake/api/v1/reply"
+    index = json.loads(sorted(reply.glob("index-*.json"))[-1].read_text())
+    model = json.loads((reply / index["reply"]["codemodel-v2"]["jsonFile"]).read_text())
+    forbidden = {"gpu_vulkan", "volk", "glslang", "SPIRV"}
+    for configuration in model["configurations"]:
+        names = {target["name"] for target in configuration["targets"]}
+        if forbidden & names or not {"gpu_backend", "gpu_metal"} <= names:
+            raise RuntimeError("Incorrect iOS GPU target graph: %s" % sorted(names))
+    release = next(configuration for configuration in model["configurations"]
+                   if configuration["name"] == "Release")
+    backend = next(target for target in release["targets"] if target["name"] == "gpu_backend")
+    metadata = json.loads((reply / backend["jsonFile"]).read_text())
+    definitions = {entry["define"] for group in metadata.get("compileGroups", [])
+                   for entry in group.get("defines", [])}
+    if "RECOMP_GPU_METAL=1" not in definitions or "RECOMP_GPU_VULKAN=1" in definitions:
+        raise RuntimeError("iOS factory capabilities do not match the Metal-only graph")
+    verify_ios_sdl_cache((directory / "CMakeCache.txt").read_text())
+    build_py.build("ios-stub", ["recomp_app"], jobs,
+                   ["--", "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO"],
+                   build_dir=directory, config="Release")
+    archive = directory / metadata["artifacts"][0]["path"]
+    symbols = subprocess.check_output(["xcrun", "nm", "-u", str(archive)], text=True)
+    if re.search(r"vulkan_(?:create_device|available|loader_path_impl|test_native_surface|"
+                 r"native_surface_for_window)|volkInitialize|vkGetInstanceProcAddr", symbols):
+        raise RuntimeError("The iOS GPU archive still references Vulkan symbols")
+    print("iOS Metal-only graph, SDL configuration and GPU archive verified: %s" % archive,
+          flush=True)
+
+
 def main():
     """Choose portable, compile-only or game-backed suites and check their prerequisites."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -199,14 +246,16 @@ def main():
     group.add_argument("--gameplay", action="store_true", help="Scripted native Options and gameplay run")
     group.add_argument("--integration", action="store_true", help="The host integration script against the game")
     group.add_argument("--compile-only", action="store_true", help="Build the native test binaries only")
+    group.add_argument("--ios-metal-only", action="store_true",
+                       help="Link and verify a Metal-only iOS stub app, no game files needed")
     group.add_argument("--ios-haptics", action="store_true", help="Check iOS Metal and haptics with Xcode, no game files needed")
     parser.add_argument("--preset", default=build_py.default_preset())
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",
                         help="Absolute directory holding the game.toml (default: the kit's stub game)")
     args = parser.parse_args()
-    if args.ios_haptics and platform.system() != "Darwin":
-        parser.error("The iOS haptics check requires macOS with Xcode's iPhoneOS SDK")
+    if (args.ios_haptics or args.ios_metal_only) and platform.system() != "Darwin":
+        parser.error("The iOS checks require macOS with Xcode's iPhoneOS SDK")
     if not args.game_dir.is_absolute() or not (args.game_dir / "game.toml").is_file():
         parser.error("--game-dir must be an absolute directory holding game.toml: %s" % args.game_dir)
     cfg = build_py.game_config.load(args.game_dir)
@@ -222,7 +271,9 @@ def main():
     env = probe_module().without_switches(os.environ)
     env["PY"] = sys.executable
     try:
-        if args.ios_haptics:
+        if args.ios_metal_only:
+            ios_metal_only(args.game_dir, build_root, args.jobs)
+        elif args.ios_haptics:
             ios_haptics(args.game_dir, build_root)
         elif args.gameplay:
             gameplay(args.jobs, args.game_dir, build_root)

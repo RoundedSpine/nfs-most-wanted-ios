@@ -19,6 +19,11 @@ else()
   set(SDL_RENDER OFF CACHE BOOL "" FORCE)
 endif()
 set(SDL_GPU OFF CACHE BOOL "" FORCE)
+if(IOS)
+  # Match the app's Metal-only backend set; no Vulkan loader/surface support.
+  set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
+  set(SDL_RENDER_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
 if(EMSCRIPTEN)
   set(SDL_PTHREADS ON CACHE BOOL "" FORCE) # the game runs on a thread of its own
 endif()

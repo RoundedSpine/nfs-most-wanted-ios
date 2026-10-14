@@ -28,12 +28,14 @@ const char *vulkan_loader_path() {
 }
 #else
 
+#ifdef RECOMP_GPU_VULKAN
 std::unique_ptr<Device> vulkan_create_device();
 void *vulkan_test_native_surface(int w, int h);
 void *vulkan_native_surface_for_window(void *sdl_window);
 const char *vulkan_loader_path_impl();
 bool vulkan_available();
-#ifdef __APPLE__
+#endif
+#ifdef RECOMP_GPU_METAL
 std::unique_ptr<Device> metal_create_device();
 void *metal_test_native_surface(int w, int h);
 void *metal_native_surface_for_window(void *sdl_window);
@@ -42,26 +44,32 @@ void metal_release_window_surface(void *surface);
 
 static const char *chosen_backend() {
     const char *want = recomp_env("GPU_BACKEND");
+#ifdef RECOMP_GPU_VULKAN
     if (want && strcmp(want, "vulkan") == 0)
         return vulkan_available() ? "vulkan" : "none";
-#ifdef __APPLE__
+#endif
+#ifdef RECOMP_GPU_METAL
     if (want && strcmp(want, "metal") == 0)
         return "metal";
     if (!want || !*want)
         return "metal";
     return "none";
 #else
+#ifdef RECOMP_GPU_VULKAN
     if (!want || !*want)
         return vulkan_available() ? "vulkan" : "none";
+#endif
     return "none";
 #endif
 }
 
 std::unique_ptr<Device> create_default_device() {
     const char *b = chosen_backend();
+#ifdef RECOMP_GPU_VULKAN
     if (strcmp(b, "vulkan") == 0)
         return vulkan_create_device();
-#ifdef __APPLE__
+#endif
+#ifdef RECOMP_GPU_METAL
     if (strcmp(b, "metal") == 0)
         return metal_create_device();
 #endif
@@ -74,9 +82,11 @@ const char *default_backend_name() {
 
 void *test_native_surface(int w, int h) {
     const char *b = chosen_backend();
+#ifdef RECOMP_GPU_VULKAN
     if (strcmp(b, "vulkan") == 0)
         return vulkan_test_native_surface(w, h);
-#ifdef __APPLE__
+#endif
+#ifdef RECOMP_GPU_METAL
     if (strcmp(b, "metal") == 0)
         return metal_test_native_surface(w, h);
 #endif
@@ -87,9 +97,11 @@ void *test_native_surface(int w, int h) {
 
 void *native_surface_for_window(void *sdl_window) {
     const char *b = chosen_backend();
+#ifdef RECOMP_GPU_VULKAN
     if (strcmp(b, "vulkan") == 0)
         return vulkan_native_surface_for_window(sdl_window);
-#ifdef __APPLE__
+#endif
+#ifdef RECOMP_GPU_METAL
     if (strcmp(b, "metal") == 0)
         return metal_native_surface_for_window(sdl_window);
 #endif
@@ -97,7 +109,7 @@ void *native_surface_for_window(void *sdl_window) {
 }
 
 void release_window_surface(void *surface) {
-#ifdef __APPLE__
+#ifdef RECOMP_GPU_METAL
     if (strcmp(chosen_backend(), "metal") == 0)
         metal_release_window_surface(surface);
 #endif
@@ -105,7 +117,11 @@ void release_window_surface(void *surface) {
 }
 
 const char *vulkan_loader_path() {
+#ifdef RECOMP_GPU_VULKAN
     return vulkan_loader_path_impl();
+#else
+    return nullptr;
+#endif
 }
 
 #endif // __EMSCRIPTEN__
