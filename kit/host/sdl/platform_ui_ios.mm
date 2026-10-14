@@ -356,9 +356,12 @@ CHHapticEngine *g_haptic_engine;
 id<CHHapticAdvancedPatternPlayer> g_rumble_player;
 controls::RumbleMailbox g_rumble_mailbox;
 std::atomic<uint64_t> g_engine_epoch{0};
+std::atomic<uint64_t> g_engine_reset_epoch{0};
 uint64_t g_seen_engine_epoch = 0;
+uint64_t g_seen_engine_reset_epoch = 0;
 uint64_t g_player_generation = 0;
 bool g_engine_running = false;
+bool g_engine_stopping = false;
 bool g_haptic_failed = false;
 const char *g_haptic_stage = "idle";
 
@@ -375,7 +378,11 @@ void reconcile_haptic_engine() {
         return;
     g_seen_engine_epoch = epoch;
     g_engine_running = false;
-    g_haptic_failed = false;
+    const uint64_t reset = g_engine_reset_epoch.load(std::memory_order_acquire);
+    if (reset != g_seen_engine_reset_epoch) {
+        g_seen_engine_reset_epoch = reset;
+        g_haptic_failed = false;
+    }
     forget_rumble_player();
 }
 
@@ -385,6 +392,26 @@ void haptic_error(const char *operation, NSError *error) {
             error ? (long)error.code : 0L);
 }
 
+// An update failure must not leave a looping effect buzzing after the player
+// reference is discarded. Don't restart until this asynchronous stop finishes.
+void shutdown_haptic_engine() {
+    if (!g_haptic_engine || g_engine_stopping)
+        return;
+    g_engine_stopping = true;
+    @try {
+        [g_haptic_engine stopWithCompletionHandler:^(NSError *error) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            g_engine_stopping = false;
+            if (error)
+                haptic_error("engine shutdown", error);
+          });
+        }];
+    } @catch (NSException *exception) {
+        g_engine_stopping = false;
+        fprintf(stderr, "[ios] Core Haptics shutdown exception: %s\n", exception.reason.UTF8String);
+    }
+}
+
 // Do not repeatedly call a failed framework object on every guest frame.
 // An engine reset or foreground transition permits a fresh attempt.
 void fail_haptic_session(const char *operation, NSError *error) {
@@ -392,6 +419,7 @@ void fail_haptic_session(const char *operation, NSError *error) {
     g_haptic_failed = true;
     g_engine_running = false;
     forget_rumble_player();
+    shutdown_haptic_engine();
 }
 
 bool device_supports_haptics() {
@@ -420,6 +448,7 @@ CHHapticEngine *haptic_engine() {
       });
     };
     engine.resetHandler = ^{
+      g_engine_reset_epoch.fetch_add(1, std::memory_order_acq_rel);
       g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
       fprintf(stderr, "[ios] Core Haptics engine reset\n");
       dispatch_async(dispatch_get_main_queue(), ^{
@@ -447,7 +476,7 @@ void stop_rumble_player() {
 // Framework calls are serialized here and every result is checked.
 void apply_device_rumble(uint16_t strength) {
     reconcile_haptic_engine();
-    if (g_haptic_failed || !device_supports_haptics())
+    if (g_haptic_failed || g_engine_stopping || !device_supports_haptics())
         return;
     if (!strength) {
         stop_rumble_player();
@@ -557,6 +586,7 @@ void drain_device_rumble() {
             g_haptic_failed = true;
             g_engine_running = false;
             forget_rumble_player();
+            shutdown_haptic_engine();
         }
     }
     if (g_rumble_mailbox.finish(request.sequence))
@@ -586,6 +616,7 @@ void haptics_lifecycle(bool active, bool terminating) {
                   exception.reason.UTF8String);
           g_haptic_failed = true;
           forget_rumble_player();
+          shutdown_haptic_engine();
       }
     };
     if (NSThread.isMainThread)
