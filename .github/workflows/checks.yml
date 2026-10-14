@@ -4,7 +4,9 @@ name: Checks
 # Building the app needs the player's own game, so it happens only on the player's Mac (./setup.sh).
 on:
   push:
-    branches: ["**"]
+    # Feature branches are checked through pull_request; checking every push
+    # as well ran the same suite twice for each update to an open PR.
+    branches: ["main", "build/main-selectable-options"]
   pull_request:
   workflow_dispatch:
 
