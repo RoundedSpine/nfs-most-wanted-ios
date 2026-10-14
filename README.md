@@ -72,6 +72,8 @@ On an Apple Silicon Mac with Xcode and your own Black Edition 1.3 game installat
 ```sh
 ./setup.sh "/path/to/Need for Speed Most Wanted"
 ./ios-build.sh <your Apple Development Team ID>
+# Or build without signing or installation:
+./ios-build.sh --unsigned
 ```
 
 Use `--device <identifier>` to select a particular device, `--no-install` to build only, and `--console` to stream the device log. The resulting app is signed by Xcode for the selected development team. The bundle targets both iPhone and iPad in landscape.

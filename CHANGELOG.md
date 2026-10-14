@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Remove the duplicate GPU drain before private Metal readback copies.
+  Share launcher/loader SHA-256 validation, reclaim completed audio recovery
+  workers, and consolidate iOS build aliases around the canonical argument
+  parser. iOS rejects unsupported Debug requests instead of silently building
+  Release. Setup selects a Python version supported by pinned dependencies
+  without a CI PATH shim. Remove
+  obsolete source-rewriting haptics/unsigned-build migration tools and avoid
+  duplicate push/PR checks for feature branches.
+
 - Enable iOS shader warm-up in the writable profile and recycle Metal upload
   blocks only after GPU completion. Private-texture uploads use a bounded
   asynchronous queue instead of waiting after every texture. Last-presented

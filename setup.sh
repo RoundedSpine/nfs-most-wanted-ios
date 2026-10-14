@@ -24,19 +24,24 @@ if ! xcode-select -p >/dev/null 2>&1; then
     exit 1
 fi
 
-# Find a native Python 3.11 or newer.
-PYTHON=""
-
-for candidate in python3.13 python3.12 python3.11 python3; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        if "$candidate" -c '
+# NumPy 2.0.2 is pinned and provides wheels for Python 3.11/3.12.
+# Keep this policy here so CI needs no fake python3.13 executable to skip it.
+compatible_python() {
+    "$1" -c '
 import platform
 import sys
 sys.exit(
-    0 if sys.version_info >= (3, 11)
+    0 if (3, 11) <= sys.version_info < (3, 13)
     and platform.machine() == "arm64"
     else 1
-)' >/dev/null 2>&1; then
+)'
+}
+
+PYTHON=""
+
+for candidate in python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        if compatible_python "$candidate" >/dev/null 2>&1; then
             PYTHON="$candidate"
             break
         fi
@@ -104,14 +109,7 @@ done
 
 # Create the Python virtual environment if needed.
 if [ -x ".venv/bin/python" ]; then
-    if ! .venv/bin/python -c '
-import platform
-import sys
-sys.exit(
-    0 if sys.version_info >= (3, 11)
-    and platform.machine() == "arm64"
-    else 1
-)' >/dev/null 2>&1; then
+    if ! compatible_python .venv/bin/python >/dev/null 2>&1; then
         echo "Removing an incompatible Python virtual environment..."
         rm -rf .venv
     fi

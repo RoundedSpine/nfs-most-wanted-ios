@@ -11,7 +11,6 @@
 #include "loader.h"
 #include "win32.h"
 #include "thunks.h"
-#include "loader.h"
 #include "seh.h"
 #include "../platform/os.h"
 

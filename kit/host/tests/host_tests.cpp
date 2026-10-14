@@ -2168,14 +2168,22 @@ static int g_idle_calls = 0;
 static int fake_outputs_live = 0;
 static void test_audio_outputs_idle() {
 #ifdef __APPLE__
-    static const OsAudioOutputProvider fake = {
-        [](uint32_t, OsAudioLayout) -> void * { ++fake_outputs_live; return &fake_outputs_live; },
-        [](void *, const int16_t *, uint32_t) { return 0; },
-        [](void *) { return 0; }, [](void *) { return 0; },
-        [](void *, float) { return 0; }, [](void *, float *g) { *g = 1; return 0; },
-        [](void *, OsAudioClock *) { return 0; }, [](void *) { return 0; },
-        [](void *) { --fake_outputs_live; },
-        [](void *, OsAudioRoute *) { return 0; }};
+    static const OsAudioOutputProvider fake = {[](uint32_t, OsAudioLayout) -> void * {
+                                                   ++fake_outputs_live;
+                                                   return &fake_outputs_live;
+                                               },
+                                               [](void *, const int16_t *, uint32_t) { return 0; },
+                                               [](void *) { return 0; },
+                                               [](void *) { return 0; },
+                                               [](void *, float) { return 0; },
+                                               [](void *, float *g) {
+                                                   *g = 1;
+                                                   return 0;
+                                               },
+                                               [](void *, OsAudioClock *) { return 0; },
+                                               [](void *) { return 0; },
+                                               [](void *) { --fake_outputs_live; },
+                                               [](void *, OsAudioRoute *) { return 0; }};
     CHECK(os_audio_outputs_open() == 0);
     os_audio_output_set_provider(&fake);
     os_audio_output_set_idle_callback([] { ++g_idle_calls; });
@@ -6510,6 +6518,16 @@ static void test_presenter_history_keeps_target_lease() {
 static void test_audio_recovery_shutdown() {
     AudioRecoveryTasks tasks;
     std::atomic<bool> entered{false}, cancelled{false}, restarted{false};
+    // Completed recoveries must be reclaimable while a new one is starting;
+    // in-flight recovery still remains interruptible at shutdown.
+    std::atomic<unsigned> finished{0};
+    for (unsigned i = 0; i < 32; ++i) {
+        CHECK(tasks.start([&](AudioRecoveryTasks &) { finished.fetch_add(1); }));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (finished.load() <= i && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        CHECK(finished.load() > i);
+    }
     CHECK(tasks.start([&](AudioRecoveryTasks &owner) {
         entered.store(true, std::memory_order_release);
         if (owner.wait(std::chrono::seconds(3)))
@@ -11182,7 +11200,8 @@ static void test_d3d9_gpu_renderer() {
             host_d9_draw(&d);
             CHECK(host_d9_texture_read(MS, 0, 0, px.data(), 8 * 4) != 0);
             if (i == 0)
-                CHECK_EQ(host_d9_metal_fitted_depth_entries(), base + 1); // the fitted path was taken
+                CHECK_EQ(host_d9_metal_fitted_depth_entries(),
+                         base + 1); // the fitted path was taken
             host_d9_texture_drop(Z0 + i);
         }
         CHECK(host_d9_texture_read(MS, 0, 0, px.data(), 8 * 4) != 0);
@@ -11198,7 +11217,9 @@ static void test_d3d9_gpu_renderer() {
         host_d9_texture_define(&z);
         CHECK(host_d9_texture_read(MS, 0, 0, px.data(), 8 * 4) != 0);
         CHECK_EQ(host_d9_metal_fitted_depth_entries(), base);
-        printf("fitted depth lifetime: 64 sources defined, drawn and dropped; cache back to %zu entries\n", base);
+        printf("fitted depth lifetime: 64 sources defined, drawn and dropped; cache back to %zu "
+               "entries\n",
+               base);
         host_d9_texture_drop(Z0);
         host_d9_texture_drop(MS);
     }

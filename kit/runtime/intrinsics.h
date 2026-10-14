@@ -31,11 +31,7 @@
 #include <setjmp.h>
 #include <stdint.h>
 
-#if __has_include("x86.h")
 #include "x86.h"
-#else
-#include "x86.h"
-#endif
 
 #ifdef __cplusplus
 extern "C" {

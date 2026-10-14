@@ -355,8 +355,11 @@ bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
         if (!texture || !bytes || r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
             r.x + r.w > int(texture.width) || r.y + r.h > int(texture.height))
             return false;
-        wait_for_gpu();
         if (texture.storageMode == MTLStorageModeShared) {
+            // CPU access needs an explicit fence. Private readback below is
+            // already ordered by this device's single queue and waits for its
+            // own copy, so draining the queue before encoding it is redundant.
+            wait_for_gpu();
             [texture getBytes:bytes
                   bytesPerRow:pitch
                    fromRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
