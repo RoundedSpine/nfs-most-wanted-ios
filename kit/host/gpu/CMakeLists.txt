@@ -5,16 +5,20 @@ target_compile_options(gpu_fake PRIVATE ${POP_WARN_STRICT})
 pop_optimize(gpu_fake 1)
 
 if(NOT IOS AND NOT ANDROID)
-# Link the real factory with a fake Metal implementation and no Vulkan
-# symbols on every desktop platform. Missing guards must fail the link.
-add_executable(gpu_metal_only_factory_tests tests/metal_only_factory_tests.cpp gpu_factory.cpp)
-target_link_libraries(gpu_metal_only_factory_tests PRIVATE gpu_fake recomp_platform)
-target_compile_definitions(gpu_metal_only_factory_tests PRIVATE RECOMP_GPU_METAL=1)
-target_compile_options(gpu_metal_only_factory_tests PRIVATE ${POP_WARN_STRICT})
-pop_optimize(gpu_metal_only_factory_tests 1)
-pop_test_binary(gpu_metal_only_factory_tests)
-add_test(NAME gpu_metal_only_factory_tests COMMAND gpu_metal_only_factory_tests WORKING_DIRECTORY ${POP_ROOT})
-set_tests_properties(gpu_metal_only_factory_tests PROPERTIES LABELS nogame)
+# Emscripten's factory is unconditionally WebGPU, so this native link test
+# must not be added to its build graph.
+if(NOT EMSCRIPTEN)
+  # Link the real factory with a fake Metal implementation and no Vulkan
+  # symbols on every desktop platform. Missing guards must fail the link.
+  add_executable(gpu_metal_only_factory_tests tests/metal_only_factory_tests.cpp gpu_factory.cpp)
+  target_link_libraries(gpu_metal_only_factory_tests PRIVATE gpu_fake recomp_platform)
+  target_compile_definitions(gpu_metal_only_factory_tests PRIVATE RECOMP_GPU_METAL=1)
+  target_compile_options(gpu_metal_only_factory_tests PRIVATE ${POP_WARN_STRICT})
+  pop_optimize(gpu_metal_only_factory_tests 1)
+  pop_test_binary(gpu_metal_only_factory_tests)
+  add_test(NAME gpu_metal_only_factory_tests COMMAND gpu_metal_only_factory_tests WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(gpu_metal_only_factory_tests PROPERTIES LABELS nogame)
+endif()
 
 add_executable(upload_arena_tests tests/upload_arena_tests.cpp)
 target_compile_options(upload_arena_tests PRIVATE ${POP_WARN_STRICT})
