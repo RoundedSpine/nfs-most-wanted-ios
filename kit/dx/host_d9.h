@@ -164,7 +164,9 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
 void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height);
 
 // The last presented frame as tightly packed RGB, for dumps. Waits for the
-// GPU. Writes nothing and returns zero when no frame was presented or `cap`
+// GPU. Metal callers enable RECOMP_D3D9_KEEP_PRESENTED=1 before backend creation
+// (the smoke host does this); normal play retains no dump texture.
+// Writes nothing and returns zero when no frame was presented or `cap`
 // is too small; *w and *h are set either way when a frame exists.
 int host_d9_read_presented(uint8_t *rgb, uint32_t cap, uint32_t *w, uint32_t *h);
 

@@ -3,6 +3,7 @@
 // Objective-C++ files under gpu/metal/.
 #pragma once
 #import <Metal/Metal.h>
+#import <dispatch/dispatch.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include "../gpu.h"
@@ -126,6 +127,8 @@ class MetalDevice final : public Device {
 
     id<MTLDevice> device_;
     id<MTLCommandQueue> queue_;
+    // Bound staging allocations without draining the GPU after every upload.
+    dispatch_semaphore_t uploads_ = dispatch_semaphore_create(3);
     id<MTLLibrary> compositor_lib_, hud_lib_, d3d_lib_;
     std::mutex mutex_;
     uint64_t next_id_ = 1;

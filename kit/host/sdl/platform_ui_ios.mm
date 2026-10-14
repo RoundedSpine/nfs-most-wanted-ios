@@ -279,6 +279,15 @@ bool lifecycle_watch(void *, SDL_Event *e) {
 
 SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
                                       SDL_WindowFlags surface_flag, int *window_mode) {
+    // Startup switches override the default, including an empty value to opt out.
+    // Keep generated shader records outside the signed bundle and game assets.
+    if (!recomp_env("D3D9_SHADER_WARM_DIR")) {
+        const fs::path cache = fs::path(host_layout().profile_dir) / "ShaderWarm";
+        std::error_code error;
+        fs::create_directories(cache, error);
+        if (!error)
+            os_setenv("RECOMP_D3D9_SHADER_WARM_DIR", cache.string().c_str());
+    }
     if (!g_lifecycle_watching.exchange(true, std::memory_order_acq_rel)) {
         SDL_AddEventWatch(lifecycle_watch, nullptr);
     }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Enable iOS shader warm-up in the writable profile and recycle Metal upload
+  blocks only after GPU completion. Private-texture uploads use a bounded
+  asynchronous queue instead of waiting after every texture. Last-presented
+  dump copies are opt-in (`RECOMP_D3D9_KEEP_PRESENTED=1`); the smoke host enables
+  them automatically. Normal play avoids the extra full-frame copy.
+
 - iOS setup prepares translation and assets directly, without building a Mac
   app first. Reuse validates analysis and generated C against their inputs and
   output contents; unchanged generated files retain timestamps for incremental

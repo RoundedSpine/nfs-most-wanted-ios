@@ -731,7 +731,8 @@ bool menu_pointer_at_guest(int32_t x, int32_t y, int button, bool down) {
     if (!mods_page_visible())
         return false;
     LayoutSnapshot layout;
-    if (!host_present_copy_layout(&layout) || layout.scene.scale_x <= 0 || layout.scene.scale_y <= 0)
+    if (!host_present_copy_layout(&layout) || layout.scene.scale_x <= 0 ||
+        layout.scene.scale_y <= 0)
         return false;
     const int wx = int(std::floor((x + .5) * layout.scene.scale_x + layout.scene.offset_x));
     const int wy = int(std::floor((y + .5) * layout.scene.scale_y + layout.scene.offset_y));
@@ -2591,6 +2592,9 @@ extern "C" uint32_t host_audio_voice_remaining_bytes(int32_t channel) {
 // ---------------------------------------------------------------------------
 
 int main(int argc, char **argv) {
+    // Dumps need an immutable last-presented image, even after drawing resumes.
+    // Normal interactive hosts avoid this otherwise unused full-frame copy.
+    os_setenv("RECOMP_D3D9_KEEP_PRESENTED", "1");
     if (argc > 0 && argv[0])
         g_argv0 = argv[0];
     g_trace = recomp_env("SMOKE_TRACE") != nullptr;
