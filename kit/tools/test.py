@@ -24,7 +24,7 @@ build_py = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_py)
 
 PORTABLE_TESTS = [
-    "tests/test_content_cache.py", "tests/test_ios_prepare.py",
+    "tests/test_content_cache.py", "tests/test_ios_prepare.py", "tests/test_ios_backend_check.py",
     "tests/test_setup.py", "tests/test_build_py.py", "tests/test_game_config.py", "tests/test_game_literals.py",
     "tests/test_gen_stub_translation.py", "tests/test_stage_game_files.py",
     "tests/test_extract_icon.py", "tests/test_web_launcher.py",
@@ -190,6 +190,16 @@ def ios_haptics(game_dir, build_root):
                        ROOT / "host/sdl/platform_ui_ios.mm"])
 
 
+def verify_ios_sdl_cache(cache):
+    """CMake dependent options may use INTERNAL rather than BOOL when disabled."""
+    values = {}
+    for name in ("SDL_VULKAN", "SDL_RENDER_VULKAN"):
+        entry = re.search(r"^" + re.escape(name) + r":[^=\n]+=([^\n]*)$", cache, re.MULTILINE)
+        values[name] = entry.group(1).strip().upper() if entry else None
+    if any(value not in ("OFF", "FALSE", "NO", "0") for value in values.values()):
+        raise RuntimeError("SDL Vulkan support must be disabled in the iOS build: %s" % values)
+
+
 def ios_metal_only(game_dir, build_root, jobs):
     """Link the iOS stub app; reject Vulkan targets and GPU archive references."""
     directory = build_root / "metal-only-check/cmake"
@@ -214,9 +224,7 @@ def ios_metal_only(game_dir, build_root, jobs):
                    for entry in group.get("defines", [])}
     if "RECOMP_GPU_METAL=1" not in definitions or "RECOMP_GPU_VULKAN=1" in definitions:
         raise RuntimeError("iOS factory capabilities do not match the Metal-only graph")
-    cache = (directory / "CMakeCache.txt").read_text()
-    if "SDL_VULKAN:BOOL=OFF" not in cache or "SDL_RENDER_VULKAN:BOOL=OFF" not in cache:
-        raise RuntimeError("SDL Vulkan support must be disabled in the iOS build")
+    verify_ios_sdl_cache((directory / "CMakeCache.txt").read_text())
     build_py.build("ios-stub", ["recomp_app"], jobs,
                    ["--", "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO"],
                    build_dir=directory, config="Release")
