@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- iOS setup prepares translation and assets directly, without building a Mac
+  app first. Reuse validates analysis and generated C against their inputs and
+  output contents; unchanged generated files retain timestamps for incremental
+  compilation. `--force-prepare` requests a clean analysis/translation run.
+
 - Serialize lifecycle audio pause/resume with output destruction, stop platform
   haptics before SDL teardown, cancel and join delayed audio recovery workers,
   and bound GPU retirement to avoid an indefinite shutdown hang. A GPU retirement

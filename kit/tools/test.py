@@ -24,6 +24,7 @@ build_py = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_py)
 
 PORTABLE_TESTS = [
+    "tests/test_content_cache.py", "tests/test_ios_prepare.py",
     "tests/test_setup.py", "tests/test_build_py.py", "tests/test_game_config.py", "tests/test_game_literals.py",
     "tests/test_gen_stub_translation.py", "tests/test_stage_game_files.py",
     "tests/test_extract_icon.py", "tests/test_web_launcher.py",

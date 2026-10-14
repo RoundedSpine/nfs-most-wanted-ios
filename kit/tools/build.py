@@ -321,6 +321,12 @@ def publish_generated(build_root, translate):
         translate(stage)
         # x86.h sits beside the generated sources so #include "x86.h" resolves.
         shutil.copy(ROOT / "runtime/x86.h", stage / "x86.h")
+        # Publishing remains atomic, but byte-identical files keep their old
+        # timestamps so regenerating does not recompile every C chunk.
+        for path in stage.rglob("*"):
+            previous = gen / path.relative_to(stage)
+            if path.is_file() and previous.is_file() and path.read_bytes() == previous.read_bytes():
+                shutil.copystat(previous, path)
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
@@ -393,7 +399,7 @@ def web_site(game_dir, build_root, preset, cfg):
 
 def parse_args(argv, system=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--regenerate", action="store_true", help="Regenerate and compile translated C")
+    parser.add_argument("--regenerate", action="store_true", help="Regenerate translated C before building")
     parser.add_argument("--allow-table-gaps", metavar="REASON", default=None,
                         help="Accept jump-table sites the translator cannot decode (passed to translate.py)")
     parser.add_argument("--forget", metavar="ADDR[,ADDR...]", default=None,
@@ -407,6 +413,8 @@ def parse_args(argv, system=None):
                              "their own address (passed to translate.py)")
     parser.add_argument("--target", choices=sorted(TARGETS), default="app")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
+    parser.add_argument("--translate-only", action="store_true",
+                        help="Regenerate sources without configuring or compiling a platform")
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
     parser.add_argument("--config", choices=("Release", "Debug"), default="Release")
     parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",
@@ -423,6 +431,10 @@ def parse_args(argv, system=None):
                         help="Android: push the configured game install minus [bundle].exclude before launch")
     parser.add_argument("--console", action="store_true", help="After launching on the device, stream its console")
     args = parser.parse_args(argv)
+    if args.translate_only and not args.regenerate:
+        parser.error("--translate-only requires --regenerate")
+    if args.translate_only and args.target not in NEEDS_GEN:
+        parser.error("--translate-only cannot be used with a target that does not translate")
     if args.push_game and (args.target != "android" or args.no_install):
         parser.error("--push-game requires --target android without --no-install")
     if args.target == "ios" and not args.stub and not args.team and not args.unsigned:
@@ -476,6 +488,8 @@ def main():
                     temporary = header.with_suffix(".h.new")
                     temporary.write_bytes(current)
                     temporary.replace(header)
+            if args.translate_only:
+                return 0
             if args.target == "ios":
                 if not args.stub and not (args.build_root / "recomp/gen/table.c").is_file():
                     parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"

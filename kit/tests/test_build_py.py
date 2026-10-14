@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -12,6 +13,54 @@ spec.loader.exec_module(build_py)
 
 
 class BuildPyTests(unittest.TestCase):
+    def test_translate_only_generates_without_configuring_or_compiling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            game = Path(directory)
+            (game / "game.toml").write_text("synthetic")
+            exe = game / "image.exe"
+            exe.write_bytes(b"synthetic")
+            listings = game / "listings"
+            listings.mkdir()
+            (listings / "functions.tsv").write_text("synthetic")
+            cfg = {"developer_exe_path": exe, "listings_path": listings, "aux_modules": []}
+            def translate(stage, *args):
+                (stage / "table.c").write_text("generated")
+            with patch("sys.argv", ["build.py", "--regenerate", "--translate-only", "--game-dir", str(game)]), \
+                 patch.object(build_py.game_config, "load", return_value=cfg), \
+                 patch.object(build_py, "run_translator", side_effect=translate), \
+                 patch.object(build_py, "configure") as configure, \
+                 patch.object(build_py, "build") as build:
+                self.assertEqual(build_py.main(), 0)
+                self.assertEqual((game / "build/recomp/gen/table.c").read_text(), "generated")
+                configure.assert_not_called()
+                build.assert_not_called()
+
+    def test_translate_only_requires_regeneration(self):
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--translate-only"], system="Linux")
+        args, _ = build_py.parse_args(["--translate-only", "--regenerate"], system="Linux")
+        self.assertTrue(args.translate_only)
+
+    def test_generated_publication_preserves_only_identical_file_timestamps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gen = root / "recomp/gen"
+            gen.mkdir(parents=True)
+            (gen / "unchanged.c").write_text("same")
+            (gen / "changed.c").write_text("old")
+            (gen / "removed.c").write_text("removed")
+            os.utime(gen / "unchanged.c", ns=(1234567890, 1234567890))
+            os.utime(gen / "changed.c", ns=(1234567890, 1234567890))
+            original_mtime = (gen / "unchanged.c").stat().st_mtime_ns
+            def translate(stage):
+                (stage / "unchanged.c").write_text("same")
+                (stage / "changed.c").write_text("new")
+            build_py.publish_generated(root, translate)
+            self.assertEqual((gen / "unchanged.c").stat().st_mtime_ns, original_mtime)
+            self.assertNotEqual((gen / "changed.c").stat().st_mtime_ns, original_mtime)
+            self.assertEqual((gen / "changed.c").read_text(), "new")
+            self.assertFalse((gen / "removed.c").exists())
+
     def test_default_preset_follows_the_operating_system(self):
         self.assertEqual(build_py.default_preset("Darwin"), "macos")
         self.assertEqual(build_py.default_preset("Linux"), "linux")
