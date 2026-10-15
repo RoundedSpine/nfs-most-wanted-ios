@@ -8,6 +8,7 @@
 #include "../../runtime/layout.h"
 #include "../audio.h"
 #include "../controls/haptic_startup.h"
+#include "../controls/haptic_intensity.h"
 #include "../controls/rumble_mailbox.h"
 #include "../launcher/launcher_sdl.h"
 #include "../present.h"
@@ -374,6 +375,9 @@ uint64_t g_seen_engine_epoch = 0;
 uint64_t g_seen_engine_reset_epoch = 0;
 uint64_t g_player_generation = 0;
 controls::HapticStartup g_engine_startup;
+controls::HapticIntensity g_haptic_intensity;
+bool g_intensity_update_pending = false;
+uint64_t g_intensity_update_count = 0;
 bool g_engine_running = false;
 bool g_engine_stopping = false;
 bool g_haptic_failed = false;
@@ -409,6 +413,7 @@ void haptic_stage(const char *stage) {
 
 void forget_rumble_player() {
     g_rumble_player = nil;
+    g_intensity_update_pending = false;
     ++g_player_generation;
 }
 
@@ -545,16 +550,64 @@ void apply_device_rumble(uint16_t strength) {
     NSError *error = nil;
     const float intensity = strength / 65535.0f;
     if (g_rumble_player) {
+        // The pattern already carries its initial intensity. Avoid sending the
+        // same value back to a player just milliseconds after startAtTime.
+        if (g_haptic_intensity.unchanged(strength))
+            return;
+        static const bool dynamic_updates = [] {
+            const char *value = recomp_env("HAPTICS_DYNAMIC_UPDATES");
+            const bool enabled = !value || strcmp(value, "0") != 0;
+            haptic_trace("dynamic intensity updates",
+                         enabled ? "enabled" : "bypassed for diagnosis");
+            return enabled;
+        }();
+        if (!dynamic_updates)
+            return;
+        const uint64_t delay = g_haptic_intensity.delay_ns(os_monotonic_ns());
+        if (delay) {
+            if (!g_intensity_update_pending) {
+                g_intensity_update_pending = true;
+                const uint64_t generation = g_player_generation;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)delay),
+                               dispatch_get_main_queue(), ^{
+                                 // A stop, reset or replacement cancels the old player's work.
+                                 // Never clear ownership of a newer player's pending update.
+                                 if (generation != g_player_generation ||
+                                     g_shutdown_prepared.load(std::memory_order_acquire))
+                                     return;
+                                 g_intensity_update_pending = false;
+                                 apply_latest_device_rumble();
+                               });
+            }
+            return;
+        }
+        // Keep ownership through the call, even if the framework invalidates
+        // its player internally. Callback processing stays on the main queue.
+        id<CHHapticAdvancedPatternPlayer> player = g_rumble_player;
         CHHapticDynamicParameter *parameter = [[CHHapticDynamicParameter alloc]
             initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
                           value:intensity
                    relativeTime:0];
-        haptic_stage("player intensity update");
-        if (![g_rumble_player sendParameters:@[ parameter ]
-                                      atTime:CHHapticTimeImmediate
-                                       error:&error] ||
-            error)
+        char detail[96];
+        const uint64_t update = ++g_intensity_update_count;
+        snprintf(detail, sizeof detail, "update=%llu strength=%u value=%.6f",
+                 (unsigned long long)update, (unsigned)strength, intensity);
+        // Detailed before/after breadcrumbs for the first second of updates;
+        // later framework errors are always recorded without per-frame I/O.
+        g_haptic_stage = "player intensity update";
+        if (update <= 64)
+            haptic_trace(g_haptic_stage, detail);
+        const BOOL updated = [player sendParameters:@[ parameter ]
+                                             atTime:CHHapticTimeImmediate
+                                              error:&error];
+        if (!updated || error) {
             fail_haptic_session(g_haptic_stage, error);
+            return;
+        }
+        g_haptic_intensity.applied(strength, os_monotonic_ns());
+        g_haptic_stage = "player intensity update returned";
+        if (update <= 64)
+            haptic_trace(g_haptic_stage, detail);
         return;
     }
 
@@ -649,6 +702,7 @@ void apply_device_rumble(uint16_t strength) {
         return;
     }
     g_rumble_player = player;
+    g_haptic_intensity.applied(strength, os_monotonic_ns());
     haptic_stage("player started");
 }
 

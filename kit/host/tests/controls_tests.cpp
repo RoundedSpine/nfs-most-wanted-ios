@@ -16,6 +16,7 @@
 #include "../controls/router.h"
 #include "../controls/rumble_mailbox.h"
 #include "../controls/haptic_startup.h"
+#include "../controls/haptic_intensity.h"
 #include "../controls/vpad.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
@@ -2046,6 +2047,33 @@ static void test_rumble_mailbox_stop_and_lifecycle() {
     const auto terminated = mailbox.latest();
     CHECK(!terminated.active && terminated.strength == 0);
     CHECK(!mailbox.finish(terminated.sequence));
+}
+
+// The initial pattern and later live updates share one pacing deadline. A
+// deferred update consumes the newest value; stops remain immediately visible.
+static void test_haptic_intensity_pacing() {
+    HapticIntensity intensity;
+    RumbleMailbox mailbox;
+    constexpr uint64_t start = 1000000000;
+    intensity.applied(10000, start);
+    CHECK(intensity.unchanged(10000)); // initial pattern needs no duplicate update
+    CHECK(!intensity.unchanged(20000));
+    CHECK(intensity.delay_ns(start + 3000000) == HapticIntensity::kIntervalNs - 3000000);
+    CHECK(intensity.delay_ns(start + HapticIntensity::kIntervalNs) == 0);
+    CHECK(intensity.delay_ns(start + 1000000000) == 0);
+    CHECK(mailbox.publish(20000));
+    const auto submitted = mailbox.latest();
+    CHECK(!mailbox.finish(submitted.sequence));
+    CHECK(mailbox.publish(30000)); // deferred work consumes latest, never stale 20000
+    CHECK(mailbox.latest().strength == 30000);
+    intensity.applied(mailbox.latest().strength, start + HapticIntensity::kIntervalNs);
+    CHECK(intensity.unchanged(30000));
+    CHECK(intensity.delay_ns(start + HapticIntensity::kIntervalNs + 1) ==
+          HapticIntensity::kIntervalNs - 1);
+    CHECK(!mailbox.publish(0)); // stop is available immediately, before the timer
+    CHECK(mailbox.latest().strength == 0);
+    mailbox.set_active(false);
+    CHECK(!mailbox.latest().active);
 }
 
 // Engine startup finishes after the submitting drain has returned. Only the
@@ -4364,6 +4392,7 @@ int main(int argc, char **argv) {
     test_rumble_sink_truth_table();
     test_rumble_mailbox_stop_and_lifecycle();
     test_haptic_async_startup();
+    test_haptic_intensity_pacing();
     test_controls_area_below_the_game();
     test_router_claims_the_controls_area();
     test_make_view_carries_the_controls_area();

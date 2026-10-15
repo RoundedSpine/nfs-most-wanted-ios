@@ -1,5 +1,14 @@
 # Changelog
 
+## iOS live rumble intensity pacing
+
+- Skip repeated intensity values and coalesce live Core Haptics updates to at
+  most 60 per second, with one deferred update consuming the newest strength.
+  Stops remain immediate and invalidate deferred work for the old player.
+- Record before/after markers and values for the first 64 live updates. Add
+  RECOMP_HAPTICS_DYNAMIC_UPDATES=0 as a diagnostic isolation switch that retains
+  continuous vibration at its initial strength until stopped.
+
 ## iOS haptics startup diagnostics
 
 - Start the continuous Core Haptics engine asynchronously to keep the main run

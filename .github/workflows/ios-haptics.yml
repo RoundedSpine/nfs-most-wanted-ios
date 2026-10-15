@@ -13,6 +13,7 @@ on:
       - kit/host/sdl/platform_ui_ios.mm
       - kit/host/controls/rumble_mailbox.h
       - kit/host/controls/haptic_startup.h
+      - kit/host/controls/haptic_intensity.h
       - kit/tools/test.py
 
 permissions:

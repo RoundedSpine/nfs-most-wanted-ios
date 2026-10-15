@@ -89,3 +89,13 @@ before its framework call; the last line narrows down the failing operation,
 but does not establish the exception or its cause. Logs are capped at 256 KiB
 per session and include the device family and iOS version. These are app logs,
 not `.ips` crash reports.
+
+If the trace ends at `player intensity update`, a diagnostic switch can isolate
+live parameter changes while retaining the continuous Core Haptics player. Add
+`RECOMP_HAPTICS_DYNAMIC_UPDATES=0` to `Documents/switches.txt` and restart.
+Vibration still starts and stops normally, but its strength stays at the initial
+value for each continuous effect. Remove the line to restore changing strength.
+This is an isolation test, not the default behavior or a confirmed crash fix.
+New logs record the first 64 updates both before and after the framework call,
+including the requested strength and intensity. Unchanged requests are skipped,
+and changing intensity is coalesced to at most 60 updates per second.
