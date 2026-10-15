@@ -9,6 +9,7 @@
 #include "../audio.h"
 #include "../controls/haptic_startup.h"
 #include "../controls/haptic_intensity.h"
+#include "../controls/haptic_player_state.h"
 #include "../controls/rumble_mailbox.h"
 #include "../launcher/launcher_sdl.h"
 #include "../present.h"
@@ -24,6 +25,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <stdio.h>
 #include <string>
 
@@ -368,6 +370,7 @@ namespace {
 UIImpactFeedbackGenerator *g_tap_generator;
 CHHapticEngine *g_haptic_engine;
 id<CHHapticAdvancedPatternPlayer> g_rumble_player;
+std::shared_ptr<controls::HapticPlayerState> g_player_state;
 controls::RumbleMailbox g_rumble_mailbox;
 std::atomic<uint64_t> g_engine_epoch{0};
 std::atomic<uint64_t> g_engine_reset_epoch{0};
@@ -413,6 +416,7 @@ void haptic_stage(const char *stage) {
 
 void forget_rumble_player() {
     g_rumble_player = nil;
+    g_player_state.reset();
     g_intensity_update_pending = false;
     ++g_player_generation;
 }
@@ -526,8 +530,10 @@ void stop_rumble_player() {
     // Keep a strong local reference until stop completes; clear ownership
     // first so a delayed completion cannot discard the next player.
     id<CHHapticAdvancedPatternPlayer> player = g_rumble_player;
+    const auto state = g_player_state;
     forget_rumble_player();
-    if (!player || !g_engine_running)
+    if (!player || !g_engine_running || !state ||
+        !state->usable(g_engine_epoch.load(std::memory_order_acquire)))
         return;
     NSError *error = nil;
     haptic_stage("player stop");
@@ -550,6 +556,12 @@ void apply_device_rumble(uint16_t strength) {
     NSError *error = nil;
     const float intensity = strength / 65535.0f;
     if (g_rumble_player) {
+        const auto state = g_player_state;
+        if (!state || !state->usable(g_engine_epoch.load(std::memory_order_acquire))) {
+            haptic_trace("intensity update skipped",
+                         "player completion or engine invalidation pending");
+            return; // completion/reset is known; owner cleanup may still be queued
+        }
         // The pattern already carries its initial intensity. Avoid sending the
         // same value back to a player just milliseconds after startAtTime.
         if (g_haptic_intensity.unchanged(strength))
@@ -597,6 +609,11 @@ void apply_device_rumble(uint16_t strength) {
         g_haptic_stage = "player intensity update";
         if (update <= 64)
             haptic_trace(g_haptic_stage, detail);
+        // The callback can run during parameter construction and tracing too.
+        if (!state->usable(g_engine_epoch.load(std::memory_order_acquire))) {
+            haptic_trace("intensity update skipped", "player completed or engine invalidated");
+            return;
+        }
         const BOOL updated = [player sendParameters:@[ parameter ]
                                              atTime:CHHapticTimeImmediate
                                               error:&error];
@@ -681,17 +698,27 @@ void apply_device_rumble(uint16_t strength) {
     player.loopEnd = duration;
     player.loopEnabled = YES;
     const uint64_t generation = ++g_player_generation;
+    const auto state = std::make_shared<controls::HapticPlayerState>(epoch);
     player.completionHandler = ^(NSError *completion_error) {
+      // Publish immediately on the callback thread. A queued main-thread update
+      // must not treat this player as live while its cleanup is waiting below.
+      state->complete();
       if (g_shutdown_prepared.load(std::memory_order_acquire))
           return;
       dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != g_player_generation)
             return;
+        haptic_trace("player completion callback",
+                     completion_error ? completion_error.description.UTF8String : "no error");
         forget_rumble_player();
         if (completion_error)
             fail_haptic_session("player completion", completion_error);
       });
     };
+    if (!state->usable(g_engine_epoch.load(std::memory_order_acquire))) {
+        reconcile_haptic_engine();
+        return;
+    }
     haptic_stage("player start");
     if (![player startAtTime:CHHapticTimeImmediate error:&error] || error) {
         fail_haptic_session(g_haptic_stage, error);
@@ -702,6 +729,7 @@ void apply_device_rumble(uint16_t strength) {
         return;
     }
     g_rumble_player = player;
+    g_player_state = state;
     g_haptic_intensity.applied(strength, os_monotonic_ns());
     haptic_stage("player started");
 }

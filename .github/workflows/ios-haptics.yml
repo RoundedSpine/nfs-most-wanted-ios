@@ -14,6 +14,7 @@ on:
       - kit/host/controls/rumble_mailbox.h
       - kit/host/controls/haptic_startup.h
       - kit/host/controls/haptic_intensity.h
+      - kit/host/controls/haptic_player_state.h
       - kit/tools/test.py
 
 permissions:

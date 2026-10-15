@@ -1,5 +1,12 @@
 # Changelog
 
+## iOS haptic player completion handoff
+
+- Publish per-player completion state on the framework callback thread before
+  queueing owner cleanup. Skip live updates and stops for players already known
+  to be completed or invalidated by an engine reset. Old completion tokens cannot
+  invalidate a replacement player; log completion and skipped-update evidence.
+
 ## iOS live rumble intensity pacing
 
 - Skip repeated intensity values and coalesce live Core Haptics updates to at

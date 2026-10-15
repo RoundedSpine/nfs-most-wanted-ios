@@ -17,6 +17,7 @@
 #include "../controls/rumble_mailbox.h"
 #include "../controls/haptic_startup.h"
 #include "../controls/haptic_intensity.h"
+#include "../controls/haptic_player_state.h"
 #include "../controls/vpad.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
@@ -2047,6 +2048,23 @@ static void test_rumble_mailbox_stop_and_lifecycle() {
     const auto terminated = mailbox.latest();
     CHECK(!terminated.active && terminated.strength == 0);
     CHECK(!mailbox.finish(terminated.sequence));
+}
+
+// The framework callback happens before its queued main-thread cleanup. That
+// interval must already block updates, without invalidating another player.
+static void test_haptic_player_completion_window() {
+    HapticPlayerState old_player(7);
+    HapticPlayerState new_player(7);
+    CHECK(old_player.usable(7));
+    CHECK(!old_player.usable(8)); // engine reset invalidates without owner cleanup
+    old_player.complete();        // callback thread publishes; cleanup still queued
+    CHECK(!old_player.usable(7));
+    CHECK(new_player.usable(7)); // a delayed old completion cannot poison its replacement
+    old_player.complete();       // repeated completion is harmless
+    CHECK(new_player.usable(7));
+    CHECK(!new_player.usable(8));
+    new_player.complete();
+    CHECK(!new_player.usable(7));
 }
 
 // The initial pattern and later live updates share one pacing deadline. A
@@ -4393,6 +4411,7 @@ int main(int argc, char **argv) {
     test_rumble_mailbox_stop_and_lifecycle();
     test_haptic_async_startup();
     test_haptic_intensity_pacing();
+    test_haptic_player_completion_window();
     test_controls_area_below_the_game();
     test_router_claims_the_controls_area();
     test_make_view_carries_the_controls_area();
