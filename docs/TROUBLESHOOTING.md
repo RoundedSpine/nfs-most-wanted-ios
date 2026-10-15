@@ -79,23 +79,20 @@ the log line starting `core.nfsmw: light pools` says whether the setup built the
 Open an issue with: your Mac model and macOS version, what you did, what you expected, and the log from `Logs/`.
 Please do **not** attach game files or saves that contain game data.
 
-### iOS closes when vibration begins
+### iOS device vibration
 
-The continuous Core Haptics bridge writes `haptics.log` in the app’s Documents
-folder, accessible through Files alongside the manually copied game folder.
-After reproducing the crash, copy this file before launching again. The next
-haptics session rotates it to `haptics.previous.log`. Each stage is flushed
-before its framework call; the last line narrows down the failing operation,
-but does not establish the exception or its cause. Logs are capped at 256 KiB
-per session and include the device family and iOS version. These are app logs,
-not `.ips` crash reports.
+Device rumble now uses UIKit feedback generators with impact pulses at most
+20 times per second. Strength controls each impact's intensity. A zero request,
+backgrounding, or shutdown cancels future pulses; UIKit controls an impact
+already issued. This feels different from continuous rumble. Connected gamepads
+continue using their own motors through SDL.
 
-If the trace ends at `player intensity update`, a diagnostic switch can isolate
-live parameter changes while retaining the continuous Core Haptics player. Add
-`RECOMP_HAPTICS_DYNAMIC_UPDATES=0` to `Documents/switches.txt` and restart.
-Vibration still starts and stops normally, but its strength stays at the initial
-value for each continuous effect. Remove the line to restore changing strength.
-This is an isolation test, not the default behavior or a confirmed crash fix.
-New logs record the first 64 updates both before and after the framework call,
-including the requested strength and intensity. Unchanged requests are skipped,
-and changing intensity is coalesced to at most 60 updates per second.
+The custom Core Haptics engine, looping advanced player and live parameter updates
+have been removed. `RECOMP_HAPTICS_DYNAMIC_UPDATES` is obsolete and may be removed
+from `Documents/switches.txt`.
+
+`Documents/haptics.log` begins with `UIKit device feedback v1` and records the first
+64 rumble impacts before and after UIKit submission. Stops record `future impacts
+cancelled`. The previous session is saved as `haptics.previous.log`. Copy the log
+through Files if an issue occurs. The log is capped at 256 KiB per session; a
+returned API call does not establish that every framework thread is healthy.

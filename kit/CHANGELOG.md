@@ -1,5 +1,17 @@
 # Changelog
 
+## UIKit device-rumble replacement
+
+- Remove the custom iOS Core Haptics engine, advanced looping player, live
+  intensity updates and player-stop lifecycle. Replace them with UIKit impacts
+  paced to at most 20 per second, with strength-scaled intensity.
+- Stops, backgrounding and shutdown cancel future pulses. UIKit controls an
+  impact already issued; feedback is pulsed rather than continuous. Keep the
+  generator cached across stops and invalidate stale timer generations.
+- Remove obsolete engine lifecycle helpers/tests and the dynamic-update switch.
+  Rename the build option to disable_device_haptics; retain controller rumble.
+  App feedback logs identify the UIKit backend.
+
 ## iOS haptics callback contracts
 
 - Keep required Core Haptics callbacks installed during shutdown and use the

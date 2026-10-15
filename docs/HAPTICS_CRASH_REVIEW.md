@@ -1,4 +1,8 @@
-# Core Haptics native-crash review
+# Core Haptics native-crash review (historical)
+
+The custom backend reviewed here has been replaced by UIKit impact pulses.
+These findings describe the removed implementation. The diagnostic dynamic-update
+switch below is obsolete; current behavior is documented in [Troubleshooting](TROUBLESHOOTING.md).
 
 The supplied app trace reaches engine start completion, player start, and a live
 intensity update. It has no native stack or signal record. This establishes that

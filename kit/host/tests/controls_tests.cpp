@@ -15,9 +15,7 @@
 #include "../controls/raster.h"
 #include "../controls/router.h"
 #include "../controls/rumble_mailbox.h"
-#include "../controls/haptic_startup.h"
-#include "../controls/haptic_intensity.h"
-#include "../controls/haptic_player_state.h"
+#include "../controls/rumble_pulses.h"
 #include "../controls/vpad.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
@@ -2050,81 +2048,70 @@ static void test_rumble_mailbox_stop_and_lifecycle() {
     CHECK(!mailbox.finish(terminated.sequence));
 }
 
-// The framework callback happens before its queued main-thread cleanup. That
-// interval must already block updates, without invalidating another player.
-static void test_haptic_player_completion_window() {
-    HapticPlayerState old_player(7);
-    HapticPlayerState new_player(7);
-    CHECK(old_player.usable(7));
-    CHECK(!old_player.usable(8)); // engine reset invalidates without owner cleanup
-    old_player.complete();        // callback thread publishes; cleanup still queued
-    CHECK(!old_player.usable(7));
-    CHECK(new_player.usable(7)); // a delayed old completion cannot poison its replacement
-    old_player.complete();       // repeated completion is harmless
-    CHECK(new_player.usable(7));
-    CHECK(!new_player.usable(8));
-    new_player.complete();
-    CHECK(!new_player.usable(7));
-}
-
-// The initial pattern and later live updates share one pacing deadline. A
-// deferred update consumes the newest value; stops remain immediately visible.
-static void test_haptic_intensity_pacing() {
-    HapticIntensity intensity;
-    RumbleMailbox mailbox;
+// Burst requests cannot flood UIKit. Stops invalidate a queued timer, and an
+// old timer cannot consume or revive a new run after background/foreground.
+static void test_rumble_pulse_pacing_and_cancellation() {
+    RumblePulses pulses;
     constexpr uint64_t start = 1000000000;
-    intensity.applied(10000, start);
-    CHECK(intensity.unchanged(10000)); // initial pattern needs no duplicate update
-    CHECK(!intensity.unchanged(20000));
-    CHECK(intensity.delay_ns(start + 3000000) == HapticIntensity::kIntervalNs - 3000000);
-    CHECK(intensity.delay_ns(start + HapticIntensity::kIntervalNs) == 0);
-    CHECK(intensity.delay_ns(start + 1000000000) == 0);
-    CHECK(mailbox.publish(20000));
-    const auto submitted = mailbox.latest();
-    CHECK(!mailbox.finish(submitted.sequence));
-    CHECK(mailbox.publish(30000)); // deferred work consumes latest, never stale 20000
-    CHECK(mailbox.latest().strength == 30000);
-    intensity.applied(mailbox.latest().strength, start + HapticIntensity::kIntervalNs);
-    CHECK(intensity.unchanged(30000));
-    CHECK(intensity.delay_ns(start + HapticIntensity::kIntervalNs + 1) ==
-          HapticIntensity::kIntervalNs - 1);
-    CHECK(!mailbox.publish(0)); // stop is available immediately, before the timer
-    CHECK(mailbox.latest().strength == 0);
-    mailbox.set_active(false);
-    CHECK(!mailbox.latest().active);
+    const auto first = pulses.request(65535, start);
+    CHECK(first.impact && first.schedule);
+    CHECK(first.delay_ns == RumblePulses::kIntervalNs);
+    for (uint64_t i = 1; i < 10000; ++i) {
+        const auto burst = pulses.request(20000, start + i);
+        CHECK(!burst.impact && !burst.schedule);
+    }
+    CHECK(pulses.consume_timer(first.generation));
+    const auto second = pulses.request(30000, start + RumblePulses::kIntervalNs);
+    CHECK(second.impact && second.schedule);
+    CHECK(!pulses.request(0, start + RumblePulses::kIntervalNs + 1).impact);
+    CHECK(!pulses.active());
+    CHECK(!pulses.consume_timer(second.generation));
+    const auto fresh = pulses.request(40000, start + RumblePulses::kIntervalNs + 2);
+    CHECK(fresh.impact && fresh.schedule);
+    CHECK(!pulses.consume_timer(second.generation)); // must not clear the fresh timer
+    CHECK(pulses.consume_timer(fresh.generation));
+    pulses.stop(); // background or shutdown
+    CHECK(!pulses.active());
+    CHECK(!pulses.consume_timer(fresh.generation));
+    CHECK(!pulses.request(0, start + 1000000000).schedule);
+
+    // A late timer must not produce catch-up impacts or lose timer ownership
+    // when a producer has already issued the next permitted impact.
+    const auto late_timer = pulses.request(10000, start + 2000000000);
+    const uint64_t late_now = start + 2000000000 + 3 * RumblePulses::kIntervalNs;
+    const auto late_producer = pulses.request(20000, late_now);
+    CHECK(late_producer.impact && !late_producer.schedule);
+    CHECK(pulses.consume_timer(late_timer.generation));
+    const auto rescheduled = pulses.request(20000, late_now + 1);
+    CHECK(!rescheduled.impact && rescheduled.schedule);
+    CHECK(rescheduled.delay_ns == RumblePulses::kIntervalNs - 1);
 }
 
-// Engine startup finishes after the submitting drain has returned. Only the
-// newest valid completion may resume, and it must consume current mailbox state.
-static void test_haptic_async_startup() {
-    HapticStartup startup;
+static void test_rumble_pulse_timer_reads_latest_mailbox() {
+    RumblePulses pulses;
     RumbleMailbox mailbox;
-    CHECK(!startup.pending());
-    CHECK(mailbox.publish(40000));
+    CHECK(mailbox.publish(10000));
     const auto request = mailbox.latest();
-    const auto first = startup.begin();
-    CHECK(startup.pending());
+    const auto first = pulses.request(request.strength, 0);
+    CHECK(first.impact && first.schedule);
     CHECK(!mailbox.finish(request.sequence));
-    CHECK(mailbox.publish(0)); // stop before engine startup completes
-    CHECK(startup.complete(first));
-    CHECK(!startup.pending());
-    CHECK(mailbox.latest().strength == 0);
-    CHECK(!startup.complete(first)); // duplicate completion cannot resume
-
-    const auto stale = startup.begin();
-    startup.invalidate(); // reset or shutdown
-    const auto current = startup.begin();
-    CHECK(!startup.complete(stale));
-    CHECK(startup.pending());
+    CHECK(mailbox.publish(50000));
+    CHECK(pulses.consume_timer(first.generation));
+    const auto changed = mailbox.latest();
+    CHECK(changed.strength == 50000);
+    const auto second = pulses.request(changed.strength, RumblePulses::kIntervalNs);
+    CHECK(second.impact && second.schedule);
+    CHECK(!mailbox.publish(0));
+    CHECK(pulses.consume_timer(second.generation));
+    CHECK(!pulses.request(mailbox.latest().strength, 2 * RumblePulses::kIntervalNs).impact);
+    CHECK(!pulses.active()); // a queued timer cannot replay the captured nonzero request
     mailbox.set_active(false);
-    CHECK(startup.complete(current));
-    CHECK(!mailbox.latest().active); // background completion cannot vibrate
     mailbox.set_active(true);
     CHECK(mailbox.latest().strength == 0);
-    const auto terminating = startup.begin();
-    startup.invalidate();
+    const auto third = pulses.request(60000, 3 * RumblePulses::kIntervalNs);
     mailbox.terminate();
-    CHECK(!startup.complete(terminating));
+    pulses.stop();
+    CHECK(!pulses.consume_timer(third.generation));
     CHECK(!mailbox.latest().active);
 }
 
@@ -4409,9 +4396,8 @@ int main(int argc, char **argv) {
     test_binding_release_all_latches_still_held_buttons();
     test_rumble_sink_truth_table();
     test_rumble_mailbox_stop_and_lifecycle();
-    test_haptic_async_startup();
-    test_haptic_intensity_pacing();
-    test_haptic_player_completion_window();
+    test_rumble_pulse_pacing_and_cancellation();
+    test_rumble_pulse_timer_reads_latest_mailbox();
     test_controls_area_below_the_game();
     test_router_claims_the_controls_area();
     test_make_view_carries_the_controls_area();
