@@ -1,4 +1,4 @@
-name: iOS Metal and Haptics SDK Check
+name: iOS Metal and UIKit Feedback SDK Check
 
 on:
   workflow_dispatch:
@@ -12,6 +12,8 @@ on:
       - kit/cmake/Dependencies.cmake
       - kit/host/sdl/platform_ui_ios.mm
       - kit/host/controls/rumble_mailbox.h
+      - kit/host/controls/rumble_pulses.h
+      - kit/host/CMakeLists.txt
       - kit/tools/test.py
 
 permissions:
@@ -34,7 +36,7 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install -r kit/requirements-dev.txt
-      - name: Compile iOS Metal and haptics enabled and disabled
+      - name: Compile iOS Metal and verify UIKit feedback objects enabled and disabled
         run: .venv/bin/python tools/test.py --ios-haptics
       - name: Link Metal-only iOS stub app and verify GPU archive
         run: .venv/bin/python tools/test.py --ios-metal-only --jobs 4

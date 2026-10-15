@@ -176,7 +176,7 @@ def ios_haptics(game_dir, build_root):
     run([sys.executable, ROOT / "tools/gen_game_config.py", "--game-dir", game_dir,
          "--header", generated / "game_config.h", "--cmake", generated / "game_config.cmake"])
     command = ["xcrun", "--sdk", "iphoneos", "clang++", "-target", "arm64-apple-ios17.0",
-               "-std=c++20", "-fobjc-arc", "-fsyntax-only", "-Werror=return-type",
+               "-std=c++20", "-fobjc-arc", "-fsyntax-only", "-Werror=return-type", "-Werror=nonnull",
                "-isysroot", sdk]
     for directory in (headers / "include", ROOT, ROOT / "host", ROOT / "runtime", generated):
         command += ["-I", str(directory)]
@@ -184,10 +184,17 @@ def ios_haptics(game_dir, build_root):
         print("Checking iOS Metal renderer: %s" % source, flush=True)
         run(command + [ROOT / source])
     for disabled in (0, 1):
-        print("Checking iOS Core Haptics %s against %s" %
+        print("Checking iOS UIKit device feedback %s against %s" %
               ("disabled" if disabled else "enabled", sdk), flush=True)
-        run(command + ["-DNFSMW_DISABLE_DEVICE_CORE_HAPTICS=%d" % disabled,
-                       ROOT / "host/sdl/platform_ui_ios.mm"])
+        output = generated.parent / ("uikit-feedback-%d.o" % disabled)
+        object_command = [item for item in command if item != "-fsyntax-only"]
+        run(object_command + ["-DNFSMW_DISABLE_DEVICE_HAPTICS=%d" % disabled,
+                              "-c", ROOT / "host/sdl/platform_ui_ios.mm", "-o", output])
+        symbols = subprocess.check_output(["xcrun", "nm", "-u", output], text=True)
+        if "CHHaptic" in symbols:
+            raise RuntimeError("The UIKit bridge must not reference Core Haptics classes")
+        if "_OBJC_CLASS_$_UIImpactFeedbackGenerator" not in symbols:
+            raise RuntimeError("The UIKit feedback generator is missing from the compiled bridge")
 
 
 def verify_ios_sdl_cache(cache):

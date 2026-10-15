@@ -1,5 +1,47 @@
 # Changelog
 
+## UIKit device-rumble replacement
+
+- Remove the custom iOS Core Haptics engine, advanced looping player, live
+  intensity updates and player-stop lifecycle. Replace them with UIKit impacts
+  paced to at most 20 per second, with strength-scaled intensity.
+- Stops, backgrounding and shutdown cancel future pulses. UIKit controls an
+  impact already issued; feedback is pulsed rather than continuous. Keep the
+  generator cached across stops and invalidate stale timer generations.
+- Remove obsolete engine lifecycle helpers/tests and the dynamic-update switch.
+  Rename the build option to disable_device_haptics; retain controller rumble.
+  App feedback logs identify the UIKit backend.
+
+## iOS haptics callback contracts
+
+- Keep required Core Haptics callbacks installed during shutdown and use the
+  terminal flag to reject late work. Do not assign nil to non-null SDK callback
+  properties. The iOS SDK check now rejects non-null contract violations.
+
+## iOS haptic player completion handoff
+
+- Publish per-player completion state on the framework callback thread before
+  queueing owner cleanup. Skip live updates and stops for players already known
+  to be completed or invalidated by an engine reset. Old completion tokens cannot
+  invalidate a replacement player; log completion and skipped-update evidence.
+
+## iOS live rumble intensity pacing
+
+- Skip repeated intensity values and coalesce live Core Haptics updates to at
+  most 60 per second, with one deferred update consuming the newest strength.
+  Stops remain immediate and invalidate deferred work for the old player.
+- Record before/after markers and values for the first 64 live updates. Add
+  RECOMP_HAPTICS_DYNAMIC_UPDATES=0 as a diagnostic isolation switch that retains
+  continuous vibration at its initial strength until stopped.
+
+## iOS haptics startup diagnostics
+
+- Start the continuous Core Haptics engine asynchronously to keep the main run
+  loop responsive during the first vibration. Ignore stale startup completions
+  after reset or shutdown and honor stops received while startup is pending.
+- Save flushed, bounded first-vibration stage logs in Documents/haptics.log
+  (previous session: haptics.previous.log) for device crash investigation.
+
 ## Bounded capture reliability (diagnostic only)
 
 - Opt-in D3D9_CAPTURE_SESSION uses explicit F8 arm/trigger, three repeatable
