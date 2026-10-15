@@ -78,3 +78,14 @@ the log line starting `core.nfsmw: light pools` says whether the setup built the
 
 Open an issue with: your Mac model and macOS version, what you did, what you expected, and the log from `Logs/`.
 Please do **not** attach game files or saves that contain game data.
+
+### iOS closes when vibration begins
+
+The continuous Core Haptics bridge writes `haptics.log` in the app’s Documents
+folder, accessible through Files alongside the manually copied game folder.
+After reproducing the crash, copy this file before launching again. The next
+haptics session rotates it to `haptics.previous.log`. Each stage is flushed
+before its framework call; the last line narrows down the failing operation,
+but does not establish the exception or its cause. Logs are capped at 256 KiB
+per session and include the device family and iOS version. These are app logs,
+not `.ips` crash reports.

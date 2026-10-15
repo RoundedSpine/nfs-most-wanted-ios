@@ -1,5 +1,13 @@
 # Changelog
 
+## iOS haptics startup diagnostics
+
+- Start the continuous Core Haptics engine asynchronously to keep the main run
+  loop responsive during the first vibration. Ignore stale startup completions
+  after reset or shutdown and honor stops received while startup is pending.
+- Save flushed, bounded first-vibration stage logs in Documents/haptics.log
+  (previous session: haptics.previous.log) for device crash investigation.
+
 ## Bounded capture reliability (diagnostic only)
 
 - Opt-in D3D9_CAPTURE_SESSION uses explicit F8 arm/trigger, three repeatable

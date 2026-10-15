@@ -15,6 +15,7 @@
 #include "../controls/raster.h"
 #include "../controls/router.h"
 #include "../controls/rumble_mailbox.h"
+#include "../controls/haptic_startup.h"
 #include "../controls/vpad.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
@@ -2045,6 +2046,40 @@ static void test_rumble_mailbox_stop_and_lifecycle() {
     const auto terminated = mailbox.latest();
     CHECK(!terminated.active && terminated.strength == 0);
     CHECK(!mailbox.finish(terminated.sequence));
+}
+
+// Engine startup finishes after the submitting drain has returned. Only the
+// newest valid completion may resume, and it must consume current mailbox state.
+static void test_haptic_async_startup() {
+    HapticStartup startup;
+    RumbleMailbox mailbox;
+    CHECK(!startup.pending());
+    CHECK(mailbox.publish(40000));
+    const auto request = mailbox.latest();
+    const auto first = startup.begin();
+    CHECK(startup.pending());
+    CHECK(!mailbox.finish(request.sequence));
+    CHECK(mailbox.publish(0)); // stop before engine startup completes
+    CHECK(startup.complete(first));
+    CHECK(!startup.pending());
+    CHECK(mailbox.latest().strength == 0);
+    CHECK(!startup.complete(first)); // duplicate completion cannot resume
+
+    const auto stale = startup.begin();
+    startup.invalidate(); // reset or shutdown
+    const auto current = startup.begin();
+    CHECK(!startup.complete(stale));
+    CHECK(startup.pending());
+    mailbox.set_active(false);
+    CHECK(startup.complete(current));
+    CHECK(!mailbox.latest().active); // background completion cannot vibrate
+    mailbox.set_active(true);
+    CHECK(mailbox.latest().strength == 0);
+    const auto terminating = startup.begin();
+    startup.invalidate();
+    mailbox.terminate();
+    CHECK(!startup.complete(terminating));
+    CHECK(!mailbox.latest().active);
 }
 
 static void test_rumble_sink_truth_table() {
@@ -4328,6 +4363,7 @@ int main(int argc, char **argv) {
     test_binding_release_all_latches_still_held_buttons();
     test_rumble_sink_truth_table();
     test_rumble_mailbox_stop_and_lifecycle();
+    test_haptic_async_startup();
     test_controls_area_below_the_game();
     test_router_claims_the_controls_area();
     test_make_view_carries_the_controls_area();
