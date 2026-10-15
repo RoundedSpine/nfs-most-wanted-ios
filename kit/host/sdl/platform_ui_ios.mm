@@ -507,8 +507,12 @@ CHHapticEngine *haptic_engine() {
       if (g_shutdown_prepared.load(std::memory_order_acquire))
           return;
       g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
-      fprintf(stderr, "[ios] Core Haptics engine stopped: %ld\n", (long)reason);
       dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_shutdown_prepared.load(std::memory_order_acquire))
+            return;
+        char detail[48];
+        snprintf(detail, sizeof detail, "reason=%ld", (long)reason);
+        haptic_trace("engine stopped callback", detail);
         reconcile_haptic_engine();
       });
     };
@@ -517,8 +521,10 @@ CHHapticEngine *haptic_engine() {
           return;
       g_engine_reset_epoch.fetch_add(1, std::memory_order_acq_rel);
       g_engine_epoch.fetch_add(1, std::memory_order_acq_rel);
-      fprintf(stderr, "[ios] Core Haptics engine reset\n");
       dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_shutdown_prepared.load(std::memory_order_acquire))
+            return;
+        haptic_trace("engine reset callback");
         reconcile_haptic_engine();
       });
     };
@@ -802,12 +808,10 @@ void platform_ui_prepare_shutdown() {
         SDL_RemoveEventWatch(lifecycle_watch, nullptr);
     void (^cleanup)(void) = ^{
       @try {
-          // Remove future engine notifications before initiating stop. Already
-          // queued drains see a permanently terminated mailbox.
+          // Keep the non-null callback properties installed while the framework
+          // stops. Every callback checks the terminal flag; replacing handlers
+          // with nil violates their SDK contract and can race callback delivery.
           g_engine_startup.invalidate();
-          g_haptic_engine.stoppedHandler = nil;
-          g_haptic_engine.resetHandler = nil;
-          g_rumble_player.completionHandler = nil;
           stop_rumble_player();
           shutdown_haptic_engine();
           g_tap_generator = nil;

@@ -1,5 +1,11 @@
 # Changelog
 
+## iOS haptics callback contracts
+
+- Keep required Core Haptics callbacks installed during shutdown and use the
+  terminal flag to reject late work. Do not assign nil to non-null SDK callback
+  properties. The iOS SDK check now rejects non-null contract violations.
+
 ## iOS haptic player completion handoff
 
 - Publish per-player completion state on the framework callback thread before

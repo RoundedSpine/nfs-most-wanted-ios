@@ -176,7 +176,7 @@ def ios_haptics(game_dir, build_root):
     run([sys.executable, ROOT / "tools/gen_game_config.py", "--game-dir", game_dir,
          "--header", generated / "game_config.h", "--cmake", generated / "game_config.cmake"])
     command = ["xcrun", "--sdk", "iphoneos", "clang++", "-target", "arm64-apple-ios17.0",
-               "-std=c++20", "-fobjc-arc", "-fsyntax-only", "-Werror=return-type",
+               "-std=c++20", "-fobjc-arc", "-fsyntax-only", "-Werror=return-type", "-Werror=nonnull",
                "-isysroot", sdk]
     for directory in (headers / "include", ROOT, ROOT / "host", ROOT / "runtime", generated):
         command += ["-I", str(directory)]
